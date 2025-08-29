@@ -94,7 +94,7 @@ with hdr_r:
 st.markdown("""
 <style>
 :root{
-  --kpi-title-size: .72rem;  /* ajuste fácil aqui */
+  --kpi-title-size: .72rem;
   --kpi-value-size: 1.88rem;
 }
 section.main div[data-testid="stHorizontalBlock"] .stToggle { transform: scale(.92); }
@@ -127,7 +127,6 @@ section.main div[data-testid="stHorizontalBlock"] .stToggle { transform: scale(.
   display:block;
 }
 
-/* título externo do gráfico */
 .chart-title{
   font-size:1.25rem;
   font-weight:800;
@@ -158,7 +157,7 @@ def run_query(sql: str):
 # ========= Dados base =========
 sql_membros = f"""
 SELECT
-  id, gestor, email, titularidade,
+  id, gestor, email, telefone, titularidade,
   data_primeiro_contato, finalizacao_primeira, finalizado_final,
   target_sup, status_atraso, updated_at, ingestion_time,
   late_sup_atraso
@@ -203,37 +202,43 @@ fin2_norm = fin2.dt.tz_localize(None).dt.normalize()
 today     = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 age_days  = (today - d1_norm).dt.days
 
-tem_gestor = fdf["gestor"].notna() & (fdf["gestor"].astype(str).str.strip() != "")
-tem_email  = fdf["email"].notna()  & (fdf["email"].astype(str).str.strip()  != "")
-membros_com_gestor = int((tem_gestor & tem_email).sum())
+# denominador alinhado às outras telas: gestor + telefone
+tem_gestor    = fdf["gestor"].notna() & (fdf["gestor"].astype(str).str.strip() != "")
+tem_telefone  = fdf["telefone"].notna() & (fdf["telefone"].astype(str).str.strip() != "")
+membros_com_gestor = int((tem_gestor & tem_telefone).sum())
 
-# atrasos correntes
+# ----- 1ª ETAPA (igual antes)
 atrasados_primeira_mask   = (fin1.isna() & (age_days > 2))
 atrasados_primeira        = int(atrasados_primeira_mask.sum())
 
-target_sup  = d1_norm + pd.Timedelta(days=7)
-atrasados_segunda_mask    = (fin1.notna() & fin2.isna() & (today > target_sup))
-atrasados_segunda         = int(atrasados_segunda_mask.sum())
+resolvidos_atraso_1 = int((fin1_norm.notna() & d1_norm.notna()
+                           & ((fin1_norm - d1_norm).dt.days > 2)).sum())
 
-# resolvidos com atraso
-resolvidos_atraso_1 = int((fin1_norm.notna() & d1_norm.notna() & ((fin1_norm - d1_norm).dt.days > 2)).sum())
-resolvidos_atraso_2 = int((fin2_norm.notna() & d1_norm.notna() & ((fin2_norm - d1_norm).dt.days > 7)).sum())
-
-# totais
-total_atrasados_1 = resolvidos_atraso_1 + atrasados_primeira
-total_atrasados_2 = resolvidos_atraso_2 + atrasados_segunda
-
-# buckets (para cards e para tabela)
+# buckets 1ª etapa (dias acima do limite de 2)
 over1_days = (age_days - 2).clip(lower=0)
-over2_days = (today - target_sup).dt.days
-
 ate7_1    = int((atrasados_primeira_mask & over1_days.between(1, 7)).sum())
 de8a14_1  = int((atrasados_primeira_mask & over1_days.between(8, 14)).sum())
 acima15_1 = int((atrasados_primeira_mask & (over1_days >= 15)).sum())
 
-ate7_2    = int((atrasados_segunda_mask & over2_days.between(1, 7)).sum())
-de8a14_2  = int((atrasados_segunda_mask & over2_days.between(8, 14)).sum())
-acima15_2 = int((atrasados_segunda_mask & (over2_days >= 15)).sum())
+# ----- 2ª ETAPA — ***NOVA LÓGICA (idêntica à Home/Tela2)***
+# Atrasados da 2ª etapa = sem finalizado_final E late_sup_atraso numérico (dias)
+late_num = pd.to_numeric(fdf.get("late_sup_atraso"), errors="coerce")
+mask_sem_final           = fin2.isna()
+atrasados_segunda_mask   = mask_sem_final & late_num.notna()
+atrasados_segunda        = int(atrasados_segunda_mask.sum())
+
+# Resolvidos com atraso na 2ª etapa = finalizou > 7 dias do 1º contato (mantém sua definição)
+resolvidos_atraso_2 = int((fin2_norm.notna() & d1_norm.notna()
+                           & ((fin2_norm - d1_norm).dt.days > 7)).sum())
+
+# Totais
+total_atrasados_1 = resolvidos_atraso_1 + atrasados_primeira
+total_atrasados_2 = resolvidos_atraso_2 + atrasados_segunda
+
+# Buckets 2ª etapa baseados diretamente nos DIAS em late_sup_atraso
+ate7_2    = int((atrasados_segunda_mask & late_num.between(1, 7)).sum())
+de8a14_2  = int((atrasados_segunda_mask & late_num.between(8, 14)).sum())
+acima15_2 = int((atrasados_segunda_mask & (late_num >= 15)).sum())
 
 # ========= Helpers de UI =========
 def fmt_num(n:int) -> str:
@@ -282,8 +287,8 @@ bottom_html = f"""
 """
 st.markdown(top_html + bottom_html, unsafe_allow_html=True)
 
-# ========= GRÁFICO — Atrasados 2ª etapa por Gestor (colunas com scroller) =========
-BAR_COLOR = "#93C5FD"  # cor desta página
+# ========= GRÁFICO — Atrasados 2ª etapa por Gestor =========
+BAR_COLOR = "#93C5FD"
 
 def _locked_slider_common():
     return {
@@ -369,9 +374,10 @@ if "gestor" in fdf.columns:
     b1_8a14    = (mask1 & over1_days.between(8, 14)).astype(int)
     b1_15plus  = (mask1 & (over1_days >= 15)).astype(int)
 
-    b2_ate7    = (mask2 & over2_days.between(1, 7)).astype(int)
-    b2_8a14    = (mask2 & over2_days.between(8, 14)).astype(int)
-    b2_15plus  = (mask2 & (over2_days >= 15)).astype(int)
+    # buckets 2º target agora a partir de late_sup_atraso (dias)
+    b2_ate7    = (mask2 & late_num.between(1, 7)).astype(int)
+    b2_8a14    = (mask2 & late_num.between(8, 14)).astype(int)
+    b2_15plus  = (mask2 & (late_num >= 15)).astype(int)
 
     base = pd.DataFrame({
         "Gestor": gestor_norm,

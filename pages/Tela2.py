@@ -135,7 +135,8 @@ sql_membros = f"""
 SELECT
   id, gestor, email, titularidade,
   data_primeiro_contato, finalizacao_primeira, finalizado_final,
-  target_sup, status_atraso, updated_at, ingestion_time
+  target_sup, status_atraso, late_sup_atraso,  -- <<< IMPORTANTE
+  updated_at, ingestion_time
 FROM {MEMBROS_FQN}
 ORDER BY ingestion_time DESC
 -- cache_bust:{cache_bust}
@@ -167,7 +168,7 @@ df["tipo_titularidade"] = df["titularidade"].apply(classifica_tit)
 tit_choice = st.session_state.get("tit_choice")
 fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
 
-# ========= KPIs =========
+# ========= KPIs (alinhados ao main.py) =========
 tem_gestor = fdf["gestor"].notna() & (fdf["gestor"].astype(str).str.strip() != "")
 tem_email  = fdf["email"].notna()  & (fdf["email"].astype(str).str.strip()  != "")
 membros_com_gestor = int((tem_gestor & tem_email).sum())
@@ -177,20 +178,31 @@ fin1 = pd.to_datetime(fdf_dt["finalizacao_primeira"], errors="coerce")
 fin2 = pd.to_datetime(fdf_dt["finalizado_final"],    errors="coerce")
 d1   = pd.to_datetime(fdf_dt["data_primeiro_contato"], errors="coerce")
 
-# target_sup: tabela ou fallback (d1 + 7)
+# Mantemos target_sup para os gráficos abaixo
 target_tbl = pd.to_datetime(fdf_dt.get("target_sup"), errors="coerce")
 d1_norm    = d1.dt.tz_localize(None).dt.normalize()
-tsup_eff   = target_tbl
-if tsup_eff is None or tsup_eff.isna().all():
-    tsup_eff = d1_norm + pd.Timedelta(days=7)
-else:
-    tsup_eff = tsup_eff.fillna(d1_norm + pd.Timedelta(days=7))
-
+tsup_eff   = target_tbl.fillna(d1_norm + pd.Timedelta(days=7))
 today_naive = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 
+# ---- Lógica da 2ª etapa igual ao main.py (usa 'late_sup_atraso') ----
+late_str = fdf_dt.get("late_sup_atraso")
+if late_str is not None:
+    late_str = late_str.astype(str).str.strip()
+else:
+    late_str = pd.Series("", index=fdf_dt.index)
+
+mask_f2_vazio = fin2.isna()
+
+# Pendentes 2ª etapa: texto exatamente "Pendente 2º etapa"
+pendentes_2a_mask = mask_f2_vazio & (late_str == "Pendente 2º etapa")
+
+# Atrasados 2ª etapa: valor numérico (dias em atraso)
+num_mask = pd.to_numeric(late_str, errors="coerce").notna()
+atrasados_2a_mask = mask_f2_vazio & num_mask
+
 finalizados_geral = int(fin2.notna().sum())
-pendentes_segunda = int(((fin1.notna()) & (fin2.isna()) & (today_naive <= tsup_eff)).sum())
-atrasados_segunda = int(((fin1.notna()) & (fin2.isna()) & (today_naive >  tsup_eff)).sum())
+pendentes_segunda = int(pendentes_2a_mask.sum())
+atrasados_segunda = int(atrasados_2a_mask.sum())
 
 def fmt_int(n) -> str:
     try: return f"{int(n):,}".replace(",", ".")
@@ -232,11 +244,12 @@ def kpi_card(title: str, value, icon: str = "📈", pct_text: str | None = None)
 cards_html = f"""
 <div class="kpi-row">
 { kpi_card("Membros com gestor", membros_com_gestor, "👥") }
-{ kpi_card("Finalizados",         finalizados_geral,  "✅", pct_fin) }
-{ kpi_card("Pendentes",           pendentes_segunda,  "⚠️", pct_pend) }
-{ kpi_card("Atrasados",           atrasados_segunda,  "⛔", pct_atr) }
+{ kpi_card("Finalizados (Geral)", finalizados_geral,  "✅", pct_fin) }
+{ kpi_card("Pendentes (Geral)",  pendentes_segunda, "⚠️", pct_pend) }
+{ kpi_card("Atrasados (Geral)",  atrasados_segunda, "⛔", pct_atr) }
 </div>
 """
+
 st.markdown(textwrap.dedent(cards_html).strip(), unsafe_allow_html=True)
 
 st.divider()
@@ -265,65 +278,76 @@ else:
     real   = dfm["FinalizadoAcumulado"].fillna(0).astype(int).tolist()
     meta   = dfm["MetaAcumulado"].fillna(0).astype(int).tolist()
 
-    # Janela FIXA
     n = len(labels)
     window   = min(20, n if n > 0 else 20)
     start_ix = max(0, n - window)
     end_ix   = max(0, n - 1)
 
     options = {
-        "backgroundColor": "transparent",
-        "tooltip": {"trigger": "axis"},
-        "legend": {"data": ["Real acumulado", "Meta acumulada"], "top": 0,
-                   "textStyle": {"color": "#E5E7EB"}},
-        "grid": {"left": 40, "right": 24, "top": 36, "bottom": 72, "containLabel": True},
-        "xAxis": {"type": "category", "data": labels,
-                  "axisLabel": {"color": "#E5E7EB", "interval": 0},
-                  "axisLine": {"lineStyle": {"color": "rgba(255,255,255,0.15)"}}},
-        "yAxis": {"type": "value", "axisLabel": {"color": "#A1A1AA"},
-                  "splitLine": {"lineStyle": {"color": "rgba(255,255,255,0.06)"}}},
-        "dataZoom": [
-            {
-                "type": "slider", "xAxisIndex": 0,
-                "startValue": start_ix, "endValue": end_ix,
-                "zoomLock": True,
-                "minValueSpan": window, "maxValueSpan": window,
-                "bottom": 24, "height": 14,
-                "handleSize": 0, "moveHandleSize": 0,
-                "showDetail": False, "brushSelect": False,
-                "borderColor": "rgba(0,0,0,0)",
-                "backgroundColor": "rgba(255,255,255,0.06)",
-                "fillerColor": "rgba(255,255,255,0.28)",
-            },
-            {
-                "type": "inside", "xAxisIndex": 0,
-                "startValue": start_ix, "endValue": end_ix,
-                "zoomLock": True,
-                "minValueSpan": window, "maxValueSpan": window,
-                "zoomOnMouseWheel": False, "moveOnMouseWheel": False, "moveOnMouseMove": False,
-            },
-        ],
-        "series": [
-            {  # Barras (Real)
-                "name": "Real acumulado",
-                "type": "bar",
-                "data": real,
-                "barMaxWidth": 26,
-                "itemStyle": {"borderRadius": [6,6,0,0], "color": PRIMARY_BLUE},
-                "emphasis": {"itemStyle": {"color": PRIMARY_BLUE}},
-            },
-            {  # Linha (Meta) amarela
-                "name": "Meta acumulada",
-                "type": "line",
-                "data": meta,
-                "smooth": True,
-                "symbol": "circle",
-                "symbolSize": 6,
-                "lineStyle": {"width": 2, "color": YELLOW_LINE},
-                "itemStyle": {"color": YELLOW_LINE},
-            },
-        ],
-    }
+    "backgroundColor": "transparent",
+    "tooltip": {"trigger": "axis"},
+    "legend": {"data": ["Real acumulado", "Meta acumulada"], "top": 0,
+               "textStyle": {"color": "#E5E7EB"}},
+    # + um pouco mais de espaço embaixo pro label do eixo X e rótulos
+    "grid": {"left": 40, "right": 24, "top": 36, "bottom": 84, "containLabel": True},
+    "xAxis": {"type": "category", "data": labels,
+              "axisLabel": {"color": "#E5E7EB", "interval": 0},
+              "axisLine": {"lineStyle": {"color": "rgba(255,255,255,0.15)"}}},
+    "yAxis": {"type": "value", "axisLabel": {"color": "#A1A1AA"},
+              "splitLine": {"lineStyle": {"color": "rgba(255,255,255,0.06)"}}},
+
+    "dataZoom": [
+        {
+            "type": "slider", "xAxisIndex": 0,
+            "startValue": start_ix, "endValue": end_ix,
+            "zoomLock": True, "minValueSpan": window, "maxValueSpan": window,
+            "bottom": 24, "height": 14,
+            "handleSize": 0, "moveHandleSize": 0,
+            "showDetail": False, "brushSelect": False,
+            "borderColor": "rgba(0,0,0,0)",
+            "backgroundColor": "rgba(255,255,255,0.06)",
+            "fillerColor": "rgba(255,255,255,0.28)",
+        },
+        {
+            "type": "inside", "xAxisIndex": 0,
+            "startValue": start_ix, "endValue": end_ix,
+            "zoomLock": True, "minValueSpan": window, "maxValueSpan": window,
+            "zoomOnMouseWheel": False, "moveOnMouseWheel": False, "moveOnMouseMove": False,
+        },
+    ],
+
+    "series": [
+    {  # Barras (Real) COM rótulo
+        "name": "Real acumulado",
+        "type": "bar",
+        "data": real,
+        "barMaxWidth": 26,
+        "itemStyle": {"borderRadius": [6,6,0,0], "color": PRIMARY_BLUE},
+        "emphasis": {"itemStyle": {"color": PRIMARY_BLUE}},
+        "label": {
+            "show": True,
+            "position": "top",
+            "fontSize": 11,
+            "color": "#E5E7EB",
+            "formatter": "{c}"
+        },
+        "labelLayout": {"hideOverlap": True}
+    },
+    {  # Linha (Meta) SEM rótulo
+        "name": "Meta acumulada",
+        "type": "line",
+        "data": meta,
+        "smooth": True,
+        "symbol": "circle",
+        "symbolSize": 6,
+        "lineStyle": {"width": 2, "color": YELLOW_LINE},
+        "itemStyle": {"color": YELLOW_LINE},
+        "label": {"show": False},        # <<< desliga os rótulos
+        "endLabel": {"show": False}      # <<< garante que nada apareça no fim
+    },
+],
+
+}
     st_echarts(options=options, height="420px", theme="dark")
 
 st.caption("Barras = Real acumulado (azul) | Linha = Meta acumulada (amarela).")
@@ -402,6 +426,14 @@ with col_left:
 # ----- Atrasados por status -----
 with col_right:
     st.subheader("🚩 Atrasados por status")
+    fin1_dt = pd.to_datetime(fdf_dt["finalizacao_primeira"], errors="coerce")
+    fin2_dt = pd.to_datetime(fdf_dt["finalizado_final"],    errors="coerce")
+    target_tbl = pd.to_datetime(fdf_dt.get("target_sup"), errors="coerce")
+    d1   = pd.to_datetime(fdf_dt["data_primeiro_contato"], errors="coerce")
+    d1_norm = d1.dt.tz_localize(None).dt.normalize()
+    tsup_eff = target_tbl.fillna(d1_norm + pd.Timedelta(days=7))
+    today_naive = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
+
     mask_atrasados = (fin1_dt.notna()) & (fin2_dt.isna()) & (today_naive > tsup_eff)
     if not mask_atrasados.any():
         st.info("Sem atrasados para agrupar por status.")

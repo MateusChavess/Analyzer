@@ -296,31 +296,41 @@ if fdf.empty:
     st.stop()
 
 # ---------------------------
-# 6) MÉTRICAS
+# 6) MÉTRICAS  (BASE = gestor + telefone)
 # ---------------------------
-tem_gestor = fdf["gestor"].notna() & (fdf["gestor"].astype(str).str.strip() != "")
-tem_email  = fdf["email"].notna()  & (fdf["email"].astype(str).str.strip()  != "")
-membros_com_gestor = int((tem_gestor & tem_email).sum())
+# População-base: somente membros com gestor e telefone preenchidos
+tem_gestor    = fdf["gestor"].notna()    & (fdf["gestor"].astype(str).str.strip()    != "")
+tem_telefone  = fdf["telefone"].notna()  & (fdf["telefone"].astype(str).str.strip()  != "")
+mask_base     = tem_gestor & tem_telefone
+base_df       = fdf.loc[mask_base].copy()
 
-fdf_dt = fdf.copy()
-fin1 = pd.to_datetime(fdf_dt["finalizacao_primeira"], errors="coerce")
-fin2 = pd.to_datetime(fdf_dt["finalizado_final"],    errors="coerce")
-d1   = pd.to_datetime(fdf_dt["data_primeiro_contato"], errors="coerce")
+membros_com_gestor = int(mask_base.sum())
+
+# Datas para a base
+fin1 = pd.to_datetime(base_df["finalizacao_primeira"], errors="coerce")
+fin2 = pd.to_datetime(base_df["finalizado_final"],    errors="coerce")
+d1   = pd.to_datetime(base_df["data_primeiro_contato"], errors="coerce")
 today_naive = pd.Timestamp.now(tz="America/Sao_Paulo").normalize().tz_localize(None)
 
-d1_norm     = d1.dt.tz_localize(None).dt.normalize()
-age_days    = (today_naive - d1_norm).dt.days
-target_sup  = d1_norm + pd.Timedelta(days=7)
+d1_norm    = d1.dt.tz_localize(None).dt.normalize()
+age_days   = (today_naive - d1_norm).dt.days
+target_sup = d1_norm + pd.Timedelta(days=7)
 
+# Métricas principais (sempre na base_df)
 finalizados_primeira   = int(fin1.notna().sum())
-finalizados_geral      = int(fin2.notna().sum())
+finalizados_geral      = int(fin2.notna().sum())     # só quem tem data final
 pendentes_primeira     = int(fin1.isna().sum())
-nao_finalizados_geral  = int((fin1.notna() & fin2.isna()).sum())
+nao_finalizados_geral  = int(fin2.isna().sum())      # só quem não tem data final
 
+# Atrasos e pendências (1ª etapa)
 pendentes_primeira_janela = int(((fin1.isna()) & (age_days <= 2)).sum())
 atrasados_primeira        = int(((fin1.isna()) & (age_days >  2)).sum())
-pendentes_segunda         = int(((fin1.notna()) & (fin2.isna()) & (today_naive <= target_sup)).sum())
-atrasados_segunda         = int(((fin1.notna()) & (fin2.isna()) & (today_naive >  target_sup)).sum())
+
+# Atrasos e pendências (2ª etapa) baseados em 'late_sup_atraso' (dentro da base_df)
+mask_sem_final     = fin2.isna()  # só conta se não tem finalização final
+pendentes_segunda  = int((mask_sem_final & (base_df["late_sup_atraso"] == "Pendente 2º etapa")).sum())
+mask_atraso_num    = pd.to_numeric(base_df["late_sup_atraso"], errors="coerce").notna()
+atrasados_segunda  = int((mask_sem_final & mask_atraso_num).sum())
 
 # --- disponibiliza KPIs para outras páginas ---
 st.session_state['kpi_membros_gestor']    = membros_com_gestor
@@ -362,11 +372,14 @@ CARD_CSS = """
 st.markdown(CARD_CSS, unsafe_allow_html=True)
 
 def fmt_num(n:int) -> str:
-    return f"{n:,}".replace(",", ".")
+    try:
+        return f"{int(n):,}".replace(",", ".")
+    except:
+        return "0"
 
 def fmt_pct(n:int, den:int) -> str:
-    den = max(den, 1)
-    return f"{(100*n/den):.1f}%"
+    den = max(int(den or 0), 1)
+    return f"{(100*int(n)/den):.1f}%"
 
 def card(title, value, icon="📈", badge_class=None, pct_text=None):
     badge = (
@@ -431,9 +444,9 @@ with col_right:
 st.divider()
 
 # ---------------------------
-# 9) BASES para gráficos
+# 9) BASES para gráficos  (usa a mesma base: gestor + telefone)
 # ---------------------------
-base_kpi = fdf[tem_gestor & tem_email].copy()
+base_kpi = base_df.copy()
 
 if not base_kpi.empty and "gestor" in base_kpi.columns:
     by_gestor = (
@@ -444,21 +457,30 @@ if not base_kpi.empty and "gestor" in base_kpi.columns:
 else:
     by_gestor = pd.DataFrame(columns=["gestor","membros"])
 
+# >>> ajuste aqui: excluir turmas "Adicional Brasil / Mundo", "Adicional Tribo" e "Adicional"
+EXCLUDE_TURMAS = {"adicional brasil / mundo", "adicional tribo", "adicional"}
+
 if not base_kpi.empty and "turma" in base_kpi.columns:
+    turma_series = base_kpi["turma"].astype(str).str.strip()
+    keep_mask = ~turma_series.str.lower().isin(EXCLUDE_TURMAS)
+
     by_turma = (
-        base_kpi.assign(turma=base_kpi["turma"].astype(str).str.strip().replace({"": "—"}))
+        base_kpi.loc[keep_mask]
+                .assign(turma=turma_series[keep_mask].replace({"": "—"}))
                 .groupby("turma", dropna=False)["id"].size()
-                .reset_index(name="membros").sort_values("membros", ascending=False)
+                .reset_index(name="membros")
+                .sort_values("membros", ascending=False)
     )
 else:
     by_turma = pd.DataFrame(columns=["turma","membros"])
 
+
 # ---------------------------
-# 10) Calendário estilizado
+# 10) Calendário estilizado (usa base_df)
 # ---------------------------
 st.subheader("📅 Entradas por dia (Primeiro Contato)")
-if "data_primeiro_contato" in fdf.columns and fdf["data_primeiro_contato"].notna().any():
-    ts = pd.to_datetime(fdf["data_primeiro_contato"], errors="coerce").dropna()
+if "data_primeiro_contato" in base_df.columns and base_df["data_primeiro_contato"].notna().any():
+    ts = pd.to_datetime(base_df["data_primeiro_contato"], errors="coerce").dropna()
     if not ts.empty:
         hoje = pd.Timestamp.today()
         c1, c2 = st.columns(2)
@@ -521,7 +543,7 @@ if "data_primeiro_contato" in fdf.columns and fdf["data_primeiro_contato"].notna
     else:
         st.info("Sem datas válidas em 'data_primeiro_contato' para montar o calendário.")
 else:
-    st.info("Coluna 'data_primeiro_contato' não encontrada ou está vazia nos filtros atuais.")
+    st.info("Coluna 'data_primeiro_contato' não encontrada ou está vazia na base atual.")
 
 st.divider()
 
@@ -647,7 +669,7 @@ def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
     st_echarts(options=options, height="360px", theme="dark")
 
 # ---------------------------
-# 12) BARRAS LADO A LADO
+# 12) BARRAS LADO A LADO (usando a base filtrada)
 # ---------------------------
 bars_left, bars_right = st.columns(2, gap="large")
 
@@ -657,7 +679,7 @@ with bars_left:
         echarts_horizontal_bar(labels=by_turma["turma"].tolist(), values=by_turma["membros"].tolist())
         st.caption(f"Total de turmas: {len(by_turma)} • role para ver mais")
     else:
-        st.info("Sem dados para montar o gráfico por Turma (após filtros).")
+        st.info("Sem dados para montar o gráfico por Turma (após filtros e base).")
 
 with bars_right:
     st.markdown("**Membros por Gestor**")
@@ -665,4 +687,4 @@ with bars_right:
         echarts_vertical_bar(labels=by_gestor["gestor"].tolist(), values=by_gestor["membros"].tolist())
         st.caption(f"Total de gestores: {len(by_gestor)} • role para ver mais")
     else:
-        st.info("Sem dados para montar o gráfico por Gestor (após filtros).")
+        st.info("Sem dados para montar o gráfico por Gestor (após filtros e base).")
