@@ -169,9 +169,10 @@ tit_choice = st.session_state.get("tit_choice")
 fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
 
 # ========= KPIs (alinhados ao main.py) =========
-tem_gestor = fdf["gestor"].notna() & (fdf["gestor"].astype(str).str.strip() != "")
-tem_email  = fdf["email"].notna()  & (fdf["email"].astype(str).str.strip()  != "")
-membros_com_gestor = int((tem_gestor & tem_email).sum())
+# Base = TODAS as linhas após os filtros (contagem simples)
+base_df = fdf.copy()
+membros_com_gestor = int(len(base_df))
+
 
 fdf_dt = fdf.copy()
 fin1 = pd.to_datetime(fdf_dt["finalizacao_primeira"], errors="coerce")

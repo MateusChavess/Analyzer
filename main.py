@@ -27,47 +27,21 @@ GREYS = ["#0f172a", "#111827", "#1f2937", "#374151", "#4b5563", "#6b7280", "#9ca
 # =============== SIDEBAR – topo + navegação custom + rodapé fixo (sem scroll) ===============
 st.sidebar.markdown("""
 <style>
-/* Sidebar cheia e sem scroll */
 [data-testid="stSidebar"] > div:first-child {
-  padding-top: 0.75rem;
-  padding-bottom: 0.75rem;
-  height: 100dvh;
-  overflow: hidden;
-  box-sizing: border-box;
+  padding-top: 0.75rem; padding-bottom: 0.75rem;
+  height: 100dvh; overflow: hidden; box-sizing: border-box;
 }
-
-/* Esconde a navegação automática do multipage e a busca dela */
-div[data-testid="stSidebarNav"] { display: none !important; }
-div[data-testid="stSidebarNavSearch"] { display: none !important; }
-
-/* Layout interno da sidebar */
+div[data-testid="stSidebarNav"], div[data-testid="stSidebarNavSearch"] { display: none !important; }
 .sb-wrap{ display:flex; flex-direction:column; height:100%; }
 .sb-grow{ flex:1 1 auto; }
 .sb-footer{ padding-top:.25rem; }
-
-/* Caixinha que cerca os botões de navegação */
-.sb-box{
-  border:1px solid rgba(255,255,255,.10);
-  border-radius:12px;
-  padding:10px;
-  margin:8px 0 12px;
-}
+.sb-box{ border:1px solid rgba(255,255,255,.10); border-radius:12px; padding:10px; margin:8px 0 12px; }
 .sb-box .stButton{ margin:4px 0; }
-
-/* Mostra apenas botões dentro do nosso wrapper .nav-only */
 .sb-box .stButton { display:none !important; }
 .sb-box .nav-only .stButton { display:block !important; }
-
-/* Safety net: remove QUALQUER input de texto que sobrar no sidebar */
 [data-testid="stSidebar"] .stTextInput,
 [data-testid="stSidebar"] input[type="text"],
-[data-testid="stSidebar"] [data-baseweb="input"] {
-  display: none !important;
-  height: 0 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-}
+[data-testid="stSidebar"] [data-baseweb="input"] { display:none !important; height:0 !important; margin:0 !important; padding:0 !important; border:0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,24 +59,18 @@ st.sidebar.divider()
 _nav = st.sidebar.empty()
 with _nav.container():
     st.sidebar.markdown('<div class="sb-box"><div class="nav-only">', unsafe_allow_html=True)
-
-    # 👉 ESTA PÁGINA (Home) DESABILITADA
     st.sidebar.button("🏠 Home", use_container_width=True, key="nav_home_btn_disabled", disabled=True)
-
-    # Demais páginas ativas
     if st.sidebar.button("📈 Análise de Membros", use_container_width=True, key="nav_membros_btn"):
         st.switch_page("pages/Tela2.py")
-
     if st.sidebar.button("⛔ Atrasados", use_container_width=True, key="nav_atrasados_btn"):
         st.switch_page("pages/Atrasados.py")
-
     st.sidebar.markdown('</div></div>', unsafe_allow_html=True)
 
 st.sidebar.divider()
 
-# Espaços reservados no rodapé da sidebar (modo + última atualização)
+# Espaços reservados no rodapé da sidebar
 _sb_auth_placeholder = st.sidebar.empty()
-_sb_last_placeholder = st.sidebar.empty()   # <- novo
+_sb_last_placeholder = st.sidebar.empty()
 
 # ---------------------------
 # 2) AUTENTICAÇÃO BIGQUERY
@@ -111,9 +79,7 @@ auth_mode = "desconhecido"
 try:
     if "gcp_service_account" in st.secrets:
         PROJECT_ID = st.secrets.get("gcp_project_id", "leads-ts")
-        creds = service_account.Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"]
-        )
+        creds = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"])
         bq = bigquery.Client(project=PROJECT_ID, credentials=creds)
         auth_mode = "secrets"
     else:
@@ -127,7 +93,6 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
-# Preenche rodapé da sidebar (modo de autenticação)
 _sb_auth_placeholder.caption(f"🔐 Modo de autenticação: {auth_mode}")
 
 # ---------------------------
@@ -140,8 +105,6 @@ def run_query(sql: str) -> pd.DataFrame:
 
 cache_bust = f"{st.session_state.refresh_key}"
 
-# >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-# OPTION 1 — TRAZER TODAS AS LINHAS (sem janela de 30 dias)
 sql = f"""
 SELECT
   id,
@@ -162,7 +125,6 @@ FROM {TABLE_FQN}
 ORDER BY ingestion_time DESC
 -- cache_bust:{cache_bust}
 """
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 with st.spinner("Consultando BigQuery…"):
     df = run_query(sql)
@@ -171,7 +133,6 @@ if df.empty:
     st.warning("Nenhum registro encontrado na tabela.")
     st.stop()
 
-# Preenche a "Última atualização" no rodapé da sidebar
 last_updated_str = pd.Timestamp.now(tz='America/Sao_Paulo').strftime('%d/%m/%Y %H:%M:%S')
 _sb_last_placeholder.caption(f"🕒 Última atualização: {last_updated_str}")
 
@@ -187,7 +148,7 @@ st.session_state.setdefault("gestor", [])
 st.session_state.setdefault("turma", [])
 st.session_state.setdefault("tit_choice", None)
 
-# --- HEADER + toggles (lado direito) ---
+# --- HEADER + toggles ---
 st.session_state.setdefault("tog_pagante",   st.session_state["tit_choice"] == "Pagante")
 st.session_state.setdefault("tog_adicional", st.session_state["tit_choice"] == "Adicional")
 
@@ -210,7 +171,6 @@ def _on_toggle_adicional():
 hdr_l, hdr_r = st.columns([8, 4], gap="medium")
 with hdr_l:
     st.title("📊 Analyzer")
-
 with hdr_r:
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     t1, t2 = st.columns([1, 1], gap="small")
@@ -226,37 +186,23 @@ section.main div[data-testid="stHorizontalBlock"] .stToggle { transform: scale(.
 """, unsafe_allow_html=True)
 
 # ---------------------------
-# 4) CONTROLES – 3 selects (somente)
+# 4) CONTROLES – 3 selects
 # ---------------------------
 st.markdown('<div class="top-controls">', unsafe_allow_html=True)
 c1, c2, c3 = st.columns([2.2, 2.2, 2.2], gap="small")
 
 with c1:
-    status_sel = st.multiselect(
-        "Status atraso",
-        options=status_opts,
-        default=st.session_state.get("status_atraso", []),
-        key="flt_status_top",
-        placeholder="Selecione os status"
-    )
-
+    status_sel = st.multiselect("Status atraso", options=status_opts,
+                                default=st.session_state.get("status_atraso", []),
+                                key="flt_status_top", placeholder="Selecione os status")
 with c2:
-    gestor_sel = st.multiselect(
-        "Gestor",
-        options=gestor_opts,
-        default=st.session_state.get("gestor", []),
-        key="flt_gestor_top",
-        placeholder="Selecione os gestores"
-    )
-
+    gestor_sel = st.multiselect("Gestor", options=gestor_opts,
+                                default=st.session_state.get("gestor", []),
+                                key="flt_gestor_top", placeholder="Selecione os gestores")
 with c3:
-    turma_sel  = st.multiselect(
-        "Turma",
-        options=turma_opts,
-        default=st.session_state.get("turma", []),
-        key="flt_turma_top",
-        placeholder="Selecione as turmas"
-    )
+    turma_sel  = st.multiselect("Turma", options=turma_opts,
+                                default=st.session_state.get("turma", []),
+                                key="flt_turma_top", placeholder="Selecione as turmas")
 st.markdown('</div>', unsafe_allow_html=True)
 
 st.session_state["status_atraso"] = status_sel
@@ -296,15 +242,10 @@ if fdf.empty:
     st.stop()
 
 # ---------------------------
-# 6) MÉTRICAS  (BASE = gestor + telefone)
+# 6) MÉTRICAS – BASE = TODAS AS LINHAS FILTRADAS
 # ---------------------------
-# População-base: somente membros com gestor e telefone preenchidos
-tem_gestor    = fdf["gestor"].notna()    & (fdf["gestor"].astype(str).str.strip()    != "")
-tem_telefone  = fdf["telefone"].notna()  & (fdf["telefone"].astype(str).str.strip()  != "")
-mask_base     = tem_gestor & tem_telefone
-base_df       = fdf.loc[mask_base].copy()
-
-membros_com_gestor = int(mask_base.sum())
+base_df = fdf.copy()                       # <<< usa tudo após filtros
+membros_com_gestor = int(len(base_df))     # <<< total de linhas
 
 # Datas para a base
 fin1 = pd.to_datetime(base_df["finalizacao_primeira"], errors="coerce")
@@ -318,21 +259,21 @@ target_sup = d1_norm + pd.Timedelta(days=7)
 
 # Métricas principais (sempre na base_df)
 finalizados_primeira   = int(fin1.notna().sum())
-finalizados_geral      = int(fin2.notna().sum())     # só quem tem data final
+finalizados_geral      = int(fin2.notna().sum())
 pendentes_primeira     = int(fin1.isna().sum())
-nao_finalizados_geral  = int(fin2.isna().sum())      # só quem não tem data final
+nao_finalizados_geral  = int(fin2.isna().sum())
 
 # Atrasos e pendências (1ª etapa)
 pendentes_primeira_janela = int(((fin1.isna()) & (age_days <= 2)).sum())
 atrasados_primeira        = int(((fin1.isna()) & (age_days >  2)).sum())
 
-# Atrasos e pendências (2ª etapa) baseados em 'late_sup_atraso' (dentro da base_df)
-mask_sem_final     = fin2.isna()  # só conta se não tem finalização final
+# Atrasos e pendências (2ª etapa)
+mask_sem_final     = fin2.isna()
 pendentes_segunda  = int((mask_sem_final & (base_df["late_sup_atraso"] == "Pendente 2º etapa")).sum())
 mask_atraso_num    = pd.to_numeric(base_df["late_sup_atraso"], errors="coerce").notna()
 atrasados_segunda  = int((mask_sem_final & mask_atraso_num).sum())
 
-# --- disponibiliza KPIs para outras páginas ---
+# Disponibiliza KPIs
 st.session_state['kpi_membros_gestor']    = membros_com_gestor
 st.session_state['kpi_finalizados_geral'] = finalizados_geral
 st.session_state['kpi_pend2']             = pendentes_segunda
@@ -372,20 +313,16 @@ CARD_CSS = """
 st.markdown(CARD_CSS, unsafe_allow_html=True)
 
 def fmt_num(n:int) -> str:
-    try:
-        return f"{int(n):,}".replace(",", ".")
-    except:
-        return "0"
+    try: return f"{int(n):,}".replace(",", ".")
+    except: return "0"
 
 def fmt_pct(n:int, den:int) -> str:
     den = max(int(den or 0), 1)
     return f"{(100*int(n)/den):.1f}%"
 
 def card(title, value, icon="📈", badge_class=None, pct_text=None):
-    badge = (
-        f'<span class="kpi-badge {badge_class}"><span class="kpi-icon">{icon}</span>{title}</span>'
-        if badge_class else f'<span class="kpi-title"><span class="kpi-icon">{icon}</span>{title}</span>'
-    )
+    badge = (f'<span class="kpi-badge {badge_class}"><span class="kpi-icon">{icon}</span>{title}</span>'
+             if badge_class else f'<span class="kpi-title"><span class="kpi-icon">{icon}</span>{title}</span>')
     html = f"""
 <div class="kpi-card">
   <div class="kpi-title">{badge}</div>
@@ -444,7 +381,7 @@ with col_right:
 st.divider()
 
 # ---------------------------
-# 9) BASES para gráficos  (usa a mesma base: gestor + telefone)
+# 9) BASES para gráficos  (usa a mesma base)
 # ---------------------------
 base_kpi = base_df.copy()
 
@@ -457,13 +394,10 @@ if not base_kpi.empty and "gestor" in base_kpi.columns:
 else:
     by_gestor = pd.DataFrame(columns=["gestor","membros"])
 
-# >>> ajuste aqui: excluir turmas "Adicional Brasil / Mundo", "Adicional Tribo" e "Adicional"
 EXCLUDE_TURMAS = {"adicional brasil / mundo", "adicional tribo", "adicional"}
-
 if not base_kpi.empty and "turma" in base_kpi.columns:
     turma_series = base_kpi["turma"].astype(str).str.strip()
     keep_mask = ~turma_series.str.lower().isin(EXCLUDE_TURMAS)
-
     by_turma = (
         base_kpi.loc[keep_mask]
                 .assign(turma=turma_series[keep_mask].replace({"": "—"}))
@@ -474,9 +408,8 @@ if not base_kpi.empty and "turma" in base_kpi.columns:
 else:
     by_turma = pd.DataFrame(columns=["turma","membros"])
 
-
 # ---------------------------
-# 10) Calendário estilizado (usa base_df)
+# 10) Calendário estilizado
 # ---------------------------
 st.subheader("📅 Entradas por dia (Primeiro Contato)")
 if "data_primeiro_contato" in base_df.columns and base_df["data_primeiro_contato"].notna().any():
@@ -484,8 +417,7 @@ if "data_primeiro_contato" in base_df.columns and base_df["data_primeiro_contato
     if not ts.empty:
         hoje = pd.Timestamp.today()
         c1, c2 = st.columns(2)
-        MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho",
-                    "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
+        MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
         mes_nome = c1.selectbox("Mês", MESES_PT, index=hoje.month - 1, key="cal_mes")
         mes = MESES_PT.index(mes_nome) + 1
         anos = sorted(ts.dt.year.unique().tolist()) or [hoje.year]
@@ -548,33 +480,21 @@ else:
 st.divider()
 
 # ============================================================
-# 11) GRÁFICOS DE BARRAS – ECHARTS (scrollbar simples + janela fixa)
+# 11) GRÁFICOS DE BARRAS – ECHARTS
 # ============================================================
 def _locked_slider_common():
-    """Estilo comum do slider: sem alças, sem detalhes, só a barrinha."""
     return {
-        "handleSize": 0,
-        "handleStyle": {"opacity": 0},
-        "showDetail": False,
-        "brushSelect": False,
-        "fillerColor": "rgba(255,255,255,0.18)",
-        "backgroundColor": "rgba(255,255,255,0.06)",
+        "handleSize": 0, "handleStyle": {"opacity": 0}, "showDetail": False, "brushSelect": False,
+        "fillerColor": "rgba(255,255,255,0.18)", "backgroundColor": "rgba(255,255,255,0.06)",
         "borderColor": "rgba(255,255,255,0.15)",
     }
 
 def echarts_horizontal_bar(labels, values, title=None, bar_color=BAR_COLOR):
     n = len(labels)
     if n == 0:
-        st.info("Sem dados.")
-        return
-
-    # 👉 janela fixa em 7 itens
-    window = min(7, n)
-    start_idx = max(0, n - window)
-    end_idx   = max(0, n - 1)
-
+        st.info("Sem dados."); return
+    window = min(7, n); start_idx = max(0, n - window); end_idx = max(0, n - 1)
     height_px = max(300, 38 * window)
-
     options = {
         "backgroundColor": "transparent",
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
@@ -585,27 +505,10 @@ def echarts_horizontal_bar(labels, values, title=None, bar_color=BAR_COLOR):
                   "axisLabel": {"color": "#E5E7EB", "margin": 8},
                   "axisLine": {"show": False},"axisTick": {"show": False}},
         "dataZoom": [
-            {
-                "type": "slider",
-                "yAxisIndex": 0,
-                "startValue": start_idx,
-                "endValue": end_idx,
-                "zoomLock": True,
-                "minValueSpan": window,
-                "maxValueSpan": window,
-                "right": 6,
-                "width": 12,
-                **_locked_slider_common(),
-            },
-            {
-                "type": "inside",
-                "yAxisIndex": 0,
-                "startValue": start_idx,
-                "endValue": end_idx,
-                "zoomLock": True,
-                "minValueSpan": window,
-                "maxValueSpan": window,
-            },
+            {"type":"slider","yAxisIndex":0,"startValue":start_idx,"endValue":end_idx,
+             "zoomLock":True,"minValueSpan":window,"maxValueSpan":window,"right":6,"width":12,**_locked_slider_common()},
+            {"type":"inside","yAxisIndex":0,"startValue":start_idx,"endValue":end_idx,
+             "zoomLock":True,"minValueSpan":window,"maxValueSpan":window},
         ],
         "series": [{
             "type": "bar","data": values,"barCategoryGap": "35%",
@@ -613,21 +516,14 @@ def echarts_horizontal_bar(labels, values, title=None, bar_color=BAR_COLOR):
             "label": {"show": True, "position": "right", "color": "#FFFFFF","fontWeight": "bold","distance": 8},
         }],
     }
-    if title:
-        options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
+    if title: options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
     st_echarts(options=options, height=f"{height_px}px", theme="dark")
 
 def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
     n = len(labels)
     if n == 0:
-        st.info("Sem dados.")
-        return
-
-    # 👉 janela fixa em 5 itens
-    window = min(5, n)
-    start_idx = max(0, n - window)
-    end_idx   = max(0, n - 1)
-
+        st.info("Sem dados."); return
+    window = min(5, n); start_idx = max(0, n - window); end_idx = max(0, n - 1)
     options = {
         "backgroundColor": "transparent",
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
@@ -637,26 +533,10 @@ def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
         "yAxis": {"type": "value","axisLabel": {"show": False},"axisLine": {"show": False},
                   "axisTick": {"show": False},"splitLine": {"show": False}},
         "dataZoom": [
-            {
-                "type": "slider",
-                "xAxisIndex": 0,
-                "startValue": start_idx,
-                "endValue": end_idx,
-                "zoomLock": True,
-                "minValueSpan": window,
-                "maxValueSpan": window,
-                "bottom": 24,
-                **_locked_slider_common(),
-            },
-            {
-                "type": "inside",
-                "xAxisIndex": 0,
-                "startValue": start_idx,
-                "endValue": end_idx,
-                "zoomLock": True,
-                "minValueSpan": window,
-                "maxValueSpan": window,
-            },
+            {"type":"slider","xAxisIndex":0,"startValue":start_idx,"endValue":end_idx,
+             "zoomLock":True,"minValueSpan":window,"maxValueSpan":window,"bottom":24,**_locked_slider_common()},
+            {"type":"inside","xAxisIndex":0,"startValue":start_idx,"endValue":end_idx,
+             "zoomLock":True,"minValueSpan":window,"maxValueSpan":window},
         ],
         "series": [{
             "type": "bar","data": values,
@@ -664,12 +544,11 @@ def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
             "label": {"show": True, "position": "top", "color": "#FFFFFF", "fontWeight": "bold"},
         }],
     }
-    if title:
-        options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
+    if title: options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
     st_echarts(options=options, height="360px", theme="dark")
 
 # ---------------------------
-# 12) BARRAS LADO A LADO (usando a base filtrada)
+# 12) BARRAS LADO A LADO
 # ---------------------------
 bars_left, bars_right = st.columns(2, gap="large")
 
@@ -688,3 +567,47 @@ with bars_right:
         st.caption(f"Total de gestores: {len(by_gestor)} • role para ver mais")
     else:
         st.info("Sem dados para montar o gráfico por Gestor (após filtros e base).")
+
+# ---------------------------
+# 13) TABELA — Resumo por Gestor (2ª etapa) + exportação CSV
+# ---------------------------
+st.subheader("📋 Resumo por Gestor")
+
+if base_df.empty:
+    st.info("Sem registros na base atual para montar a tabela.")
+else:
+    g = base_df.copy()
+    gestor_norm = (
+        g["gestor"].fillna("Sem gestor").astype(str).str.strip()
+         .replace({"": "Sem gestor", "nan": "Sem gestor", "None": "Sem gestor"})
+    )
+    fin2 = pd.to_datetime(g["finalizado_final"], errors="coerce")
+    late = g["late_sup_atraso"].astype(str).str.strip()
+
+    mask_fin2_vazio = fin2.isna()
+    pend2_mask = mask_fin2_vazio & (late == "Pendente 2º etapa")
+    atr2_mask  = mask_fin2_vazio & pd.to_numeric(late, errors="coerce").notna()
+    fin2_ok    = fin2.notna()
+
+    base_tab = pd.DataFrame({
+        "Gestor": gestor_norm,
+        "Total de alunos": 1,
+        "Pendentes 2ª etapa": pend2_mask.astype(int),
+        "Atrasados 2ª etapa": atr2_mask.astype(int),
+        "Finalizados 2ª etapa": fin2_ok.astype(int),
+    })
+
+    tabela_gestores = (
+        base_tab.groupby("Gestor", as_index=False)
+                .sum(numeric_only=True)
+                .sort_values(["Atrasados 2ª etapa", "Pendentes 2ª etapa", "Total de alunos"],
+                             ascending=[False, False, False])
+    )
+
+    st.dataframe(tabela_gestores, use_container_width=True, hide_index=True)
+    st.download_button(
+        label="⬇️ Baixar CSV",
+        data=tabela_gestores.to_csv(index=False).encode("utf-8"),
+        file_name="resumo_gestores_2a_etapa.csv",
+        mime="text/csv",
+    )
