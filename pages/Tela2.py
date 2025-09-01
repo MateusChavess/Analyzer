@@ -194,16 +194,27 @@ else:
 
 mask_f2_vazio = fin2.isna()
 
-# Pendentes 2ª etapa: texto exatamente "Pendente 2º etapa"
-pendentes_2a_mask = mask_f2_vazio & (late_str == "Pendente 2º etapa")
+# ---- Lógica da 2ª etapa (Geral) — baseada em data_primeiro_contato ----
+# Série de datas
+fin2 = pd.to_datetime(fdf_dt["finalizado_final"],    errors="coerce")
+d1   = pd.to_datetime(fdf_dt["data_primeiro_contato"], errors="coerce")
 
-# Atrasados 2ª etapa: valor numérico (dias em atraso)
-num_mask = pd.to_numeric(late_str, errors="coerce").notna()
-atrasados_2a_mask = mask_f2_vazio & num_mask
+# Hoje sem timezone e só a data
+hoje_date = pd.Timestamp.now(tz=TZ).date()
 
+# Normaliza p/ data (naive) e calcula diferença em dias
+d1_norm    = pd.to_datetime(d1.dt.date, errors="coerce")
+dias_diff  = (pd.Timestamp(hoje_date) - d1_norm).dt.days
+dias_diff  = dias_diff.clip(lower=0)  # evita negativos se houver datas futuras
+
+# Regras: não finalizado + (<=7 dias = Pendente | >7 = Atrasado)
+mask_sem_final    = fin2.isna()
+pendentes_segunda = int((mask_sem_final & (dias_diff <= 7)).sum())
+atrasados_segunda = int((mask_sem_final & (dias_diff > 7)).sum())
+
+# Finalizados (Geral)
 finalizados_geral = int(fin2.notna().sum())
-pendentes_segunda = int(pendentes_2a_mask.sum())
-atrasados_segunda = int(atrasados_2a_mask.sum())
+
 
 def fmt_int(n) -> str:
     try: return f"{int(n):,}".replace(",", ".")

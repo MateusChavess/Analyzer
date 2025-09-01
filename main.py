@@ -251,27 +251,30 @@ membros_com_gestor = int(len(base_df))     # <<< total de linhas
 fin1 = pd.to_datetime(base_df["finalizacao_primeira"], errors="coerce")
 fin2 = pd.to_datetime(base_df["finalizado_final"],    errors="coerce")
 d1   = pd.to_datetime(base_df["data_primeiro_contato"], errors="coerce")
-today_naive = pd.Timestamp.now(tz="America/Sao_Paulo").normalize().tz_localize(None)
 
-d1_norm    = d1.dt.tz_localize(None).dt.normalize()
-age_days   = (today_naive - d1_norm).dt.days
-target_sup = d1_norm + pd.Timedelta(days=7)
+# ✅ Data de hoje (sem tz) e string dd/mm/yyyy
+hoje_date = pd.Timestamp.now(tz="America/Sao_Paulo").date()
+hoje_str  = pd.Timestamp(hoje_date).strftime("%d/%m/%Y")  # se precisar exibir
 
-# Métricas principais (sempre na base_df)
+# ✅ Normaliza 'd1' para data (naive) e calcula diferença em dias
+d1_norm   = pd.to_datetime(d1.dt.date, errors="coerce")
+dias_diff = (pd.Timestamp(hoje_date) - d1_norm).dt.days
+
+
+# Métricas principais
 finalizados_primeira   = int(fin1.notna().sum())
 finalizados_geral      = int(fin2.notna().sum())
 pendentes_primeira     = int(fin1.isna().sum())
 nao_finalizados_geral  = int(fin2.isna().sum())
 
 # Atrasos e pendências (1ª etapa)
-pendentes_primeira_janela = int(((fin1.isna()) & (age_days <= 2)).sum())
-atrasados_primeira        = int(((fin1.isna()) & (age_days >  2)).sum())
+pendentes_primeira_janela = int(((fin1.isna()) & (dias_diff <= 2)).sum())
+atrasados_primeira        = int(((fin1.isna()) & (dias_diff >  2)).sum())
 
-# Atrasos e pendências (2ª etapa)
-mask_sem_final     = fin2.isna()
-pendentes_segunda  = int((mask_sem_final & (base_df["late_sup_atraso"] == "Pendente 2º etapa")).sum())
-mask_atraso_num    = pd.to_numeric(base_df["late_sup_atraso"], errors="coerce").notna()
-atrasados_segunda  = int((mask_sem_final & mask_atraso_num).sum())
+# Atrasos e pendências (2ª etapa) NOVA LÓGICA
+mask_sem_final = fin2.isna()
+pendentes_segunda = int((mask_sem_final & (dias_diff <= 7)).sum())
+atrasados_segunda = int((mask_sem_final & (dias_diff > 7)).sum())
 
 # Disponibiliza KPIs
 st.session_state['kpi_membros_gestor']    = membros_com_gestor
@@ -582,25 +585,30 @@ else:
          .replace({"": "Sem gestor", "nan": "Sem gestor", "None": "Sem gestor"})
     )
     fin2 = pd.to_datetime(g["finalizado_final"], errors="coerce")
-    late = g["late_sup_atraso"].astype(str).str.strip()
+    # mesma referência de "hoje_date" já criada no bloco de métricas
+    d1_tab   = pd.to_datetime(g["data_primeiro_contato"], errors="coerce")
+    d1_tab   = pd.to_datetime(d1_tab.dt.date, errors="coerce")   # normaliza p/ data (naive)
+    dias_tab = (pd.Timestamp(hoje_date) - d1_tab).dt.days
+    dias_tab = dias_tab.clip(lower=0)  # evita negativos caso haja datas futuras
 
-    mask_fin2_vazio = fin2.isna()
-    pend2_mask = mask_fin2_vazio & (late == "Pendente 2º etapa")
-    atr2_mask  = mask_fin2_vazio & pd.to_numeric(late, errors="coerce").notna()
+    mask_sem_final = fin2.isna()
+    pend2_mask = mask_sem_final & (dias_tab <= 7)   # <=7 dias = Pendente 2ª etapa
+    atr2_mask  = mask_sem_final & (dias_tab > 7)    #  >7 dias = Atrasado  2ª etapa
     fin2_ok    = fin2.notna()
 
     base_tab = pd.DataFrame({
-        "Gestor": gestor_norm,
-        "Total de alunos": 1,
-        "Pendentes 2ª etapa": pend2_mask.astype(int),
-        "Atrasados 2ª etapa": atr2_mask.astype(int),
-        "Finalizados 2ª etapa": fin2_ok.astype(int),
+    "Gestor": gestor_norm,
+    "Total de alunos": 1,
+    "Pendentes Geral": pend2_mask.astype(int),
+    "Atrasados Geral": atr2_mask.astype(int),
+    "Finalizados Geral": fin2_ok.astype(int),
     })
+
 
     tabela_gestores = (
         base_tab.groupby("Gestor", as_index=False)
                 .sum(numeric_only=True)
-                .sort_values(["Atrasados 2ª etapa", "Pendentes 2ª etapa", "Total de alunos"],
+                .sort_values(["Atrasados Geral", "Pendentes Geral", "Total de alunos"],
                              ascending=[False, False, False])
     )
 
