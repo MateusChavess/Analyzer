@@ -189,56 +189,71 @@ df["tipo_titularidade"] = df["titularidade"].apply(classifica_tit)
 tit_choice = st.session_state.get("tit_choice")
 fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
 
-# ========= Métricas base =========
-fin1 = pd.to_datetime(fdf["finalizacao_primeira"], errors="coerce")
-fin2 = pd.to_datetime(fdf["finalizado_final"],    errors="coerce")
-d1   = pd.to_datetime(fdf["data_primeiro_contato"], errors="coerce")
+# ========= Métricas base (ALINHADAS COM main.py) =========
 
-# normaliza (naive / dia)
+# mesma função da Home: considera preenchido tudo que NÃO é "", nan, none, null, nat
+def is_filled(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    s_low = s.str.lower()
+    empty = s_low.isin(["", "nan", "none", "null", "nat"])
+    return ~empty
+
+fin1_raw = fdf["finalizacao_primeira"]
+fin2_raw = fdf["finalizado_final"]
+d1_raw   = fdf["data_primeiro_contato"]
+
+# máscaras de preenchimento (sem parsear datas p/ contar)
+fin1_filled = is_filled(fin1_raw)
+fin2_filled = is_filled(fin2_raw)
+
+# datas apenas para calcular janelas (quando existentes)
+fin1 = pd.to_datetime(fin1_raw, errors="coerce")
+fin2 = pd.to_datetime(fin2_raw, errors="coerce")
+d1   = pd.to_datetime(d1_raw,   errors="coerce")
+
 d1_norm   = d1.dt.tz_localize(None).dt.normalize()
 fin1_norm = fin1.dt.tz_localize(None).dt.normalize()
 fin2_norm = fin2.dt.tz_localize(None).dt.normalize()
 
-today     = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
-age_days  = (today - d1_norm).dt.days
+today    = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
+age_days = (today - d1_norm).dt.days  # NaN quando d1 for inválida
 
-# denominador alinhado às outras telas: gestor + telefone
-tem_gestor    = fdf["gestor"].notna() & (fdf["gestor"].astype(str).str.strip() != "")
-tem_telefone  = fdf["telefone"].notna() & (fdf["telefone"].astype(str).str.strip() != "")
-membros_com_gestor = int((tem_gestor & tem_telefone).sum())
+# >>> denominador igual ao main.py: total de linhas após filtros
+membros_com_gestor = int(len(fdf))
 
-# ----- 1ª ETAPA (igual antes)
-atrasados_primeira_mask   = (fin1.isna() & (age_days > 2))
-atrasados_primeira        = int(atrasados_primeira_mask.sum())
+# -------- 1ª ETAPA (idêntico ao main.py) --------
+# Em atraso 1ª etapa = NÃO tem finalização 1ª etapa preenchida e > 2 dias do 1º contato
+atrasados_primeira_mask = (~fin1_filled) & (age_days > 2)
+atrasados_primeira      = int(atrasados_primeira_mask.sum())
 
-resolvidos_atraso_1 = int((fin1_norm.notna() & d1_norm.notna()
-                           & ((fin1_norm - d1_norm).dt.days > 2)).sum())
+# resolvidos com atraso 1ª etapa (>2 dias) — opcional para o seu card “Total de Atrasados 1º Target”
+resolvidos_atraso_1 = int(
+    (fin1_norm.notna() & d1_norm.notna() & ((fin1_norm - d1_norm).dt.days > 2)).sum()
+)
 
 # buckets 1ª etapa (dias acima do limite de 2)
 over1_days = (age_days - 2).clip(lower=0)
-ate7_1    = int((atrasados_primeira_mask & over1_days.between(1, 7)).sum())
-de8a14_1  = int((atrasados_primeira_mask & over1_days.between(8, 14)).sum())
-acima15_1 = int((atrasados_primeira_mask & (over1_days >= 15)).sum())
-
-# ----- 2ª ETAPA — ***NOVA LÓGICA (idêntica à Home/Tela2)***
-# Atrasados da 2ª etapa = sem finalizado_final E late_sup_atraso numérico (dias)
-late_num = pd.to_numeric(fdf.get("late_sup_atraso"), errors="coerce")
-mask_sem_final           = fin2.isna()
-atrasados_segunda_mask   = mask_sem_final & late_num.notna()
-atrasados_segunda        = int(atrasados_segunda_mask.sum())
-
-# Resolvidos com atraso na 2ª etapa = finalizou > 7 dias do 1º contato (mantém sua definição)
-resolvidos_atraso_2 = int((fin2_norm.notna() & d1_norm.notna()
-                           & ((fin2_norm - d1_norm).dt.days > 7)).sum())
-
-# Totais
+ate7_1     = int((atrasados_primeira_mask & over1_days.between(1, 7)).sum())
+de8a14_1   = int((atrasados_primeira_mask & over1_days.between(8, 14)).sum())
+acima15_1  = int((atrasados_primeira_mask & (over1_days >= 15)).sum())
 total_atrasados_1 = resolvidos_atraso_1 + atrasados_primeira
+
+# -------- 2ª ETAPA (idêntico ao main.py) --------
+# Em atraso 2ª etapa = NÃO tem finalização geral preenchida e > 7 dias do 1º contato
+atrasados_segunda_mask = (~fin2_filled) & (age_days > 7)
+atrasados_segunda      = int(atrasados_segunda_mask.sum())
+
+# resolvidos com atraso 2ª etapa (>7 dias) — opcional para “Total de Atrasados 2º Target”
+resolvidos_atraso_2 = int(
+    (fin2_norm.notna() & d1_norm.notna() & ((fin2_norm - d1_norm).dt.days > 7)).sum()
+)
 total_atrasados_2 = resolvidos_atraso_2 + atrasados_segunda
 
-# Buckets 2ª etapa baseados diretamente nos DIAS em late_sup_atraso
-ate7_2    = int((atrasados_segunda_mask & late_num.between(1, 7)).sum())
-de8a14_2  = int((atrasados_segunda_mask & late_num.between(8, 14)).sum())
-acima15_2 = int((atrasados_segunda_mask & (late_num >= 15)).sum())
+# buckets 2ª etapa (dias acima do limite de 7)
+over2_days = (age_days - 7).clip(lower=0)
+ate7_2     = int((atrasados_segunda_mask & over2_days.between(1, 7)).sum())
+de8a14_2   = int((atrasados_segunda_mask & over2_days.between(8, 14)).sum())
+acima15_2  = int((atrasados_segunda_mask & (over2_days >= 15)).sum())
 
 # ========= Helpers de UI =========
 def fmt_num(n:int) -> str:
@@ -374,10 +389,11 @@ if "gestor" in fdf.columns:
     b1_8a14    = (mask1 & over1_days.between(8, 14)).astype(int)
     b1_15plus  = (mask1 & (over1_days >= 15)).astype(int)
 
-    # buckets 2º target agora a partir de late_sup_atraso (dias)
-    b2_ate7    = (mask2 & late_num.between(1, 7)).astype(int)
-    b2_8a14    = (mask2 & late_num.between(8, 14)).astype(int)
-    b2_15plus  = (mask2 & (late_num >= 15)).astype(int)
+    # buckets 2º target (mesma regra do main.py, a partir de age_days > 7)
+    b2_ate7   = (mask2 & over2_days.between(1, 7)).astype(int)
+    b2_8a14   = (mask2 & over2_days.between(8, 14)).astype(int)
+    b2_15plus = (mask2 & (over2_days >= 15)).astype(int)
+
 
     base = pd.DataFrame({
         "Gestor": gestor_norm,

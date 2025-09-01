@@ -244,35 +244,40 @@ if fdf.empty:
 # ---------------------------
 # 6) MÉTRICAS – BASE = TODAS AS LINHAS FILTRADAS
 # ---------------------------
-base_df = fdf.copy()                       # <<< usa tudo após filtros
-membros_com_gestor = int(len(base_df))     # <<< total de linhas
+base_df = fdf.copy()
+membros_com_gestor = int(len(base_df))
 
-# Datas para a base
-fin1 = pd.to_datetime(base_df["finalizacao_primeira"], errors="coerce")
-fin2 = pd.to_datetime(base_df["finalizado_final"],    errors="coerce")
+# Helper: considera "preenchido" tudo que NÃO seja "", nan, none, null, nat (case-insensitive)
+def is_filled(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    s_low = s.str.lower()
+    empty = s_low.isin(["", "nan", "none", "null", "nat"])
+    return ~empty
+
+# Máscaras de preenchimento (sem parsear data)
+fin1_filled = is_filled(base_df["finalizacao_primeira"])
+fin2_filled = is_filled(base_df["finalizado_final"])
+
+# Para janelas de dias, seguimos usando a data do 1º contato
 d1   = pd.to_datetime(base_df["data_primeiro_contato"], errors="coerce")
-
-# ✅ Data de hoje (sem tz) e string dd/mm/yyyy
 hoje_date = pd.Timestamp.now(tz="America/Sao_Paulo").date()
-hoje_str  = pd.Timestamp(hoje_date).strftime("%d/%m/%Y")  # se precisar exibir
+hoje_str  = pd.Timestamp(hoje_date).strftime("%d/%m/%Y")
 
-# ✅ Normaliza 'd1' para data (naive) e calcula diferença em dias
 d1_norm   = pd.to_datetime(d1.dt.date, errors="coerce")
 dias_diff = (pd.Timestamp(hoje_date) - d1_norm).dt.days
 
+# Métricas principais (agora por "preenchimento")
+finalizados_primeira   = int(fin1_filled.sum())
+finalizados_geral      = int(fin2_filled.sum())
+pendentes_primeira     = int((~fin1_filled).sum())
+nao_finalizados_geral  = int((~fin2_filled).sum())
 
-# Métricas principais
-finalizados_primeira   = int(fin1.notna().sum())
-finalizados_geral      = int(fin2.notna().sum())
-pendentes_primeira     = int(fin1.isna().sum())
-nao_finalizados_geral  = int(fin2.isna().sum())
+# Atrasos e pendências (1ª etapa) — base = quem NÃO tem finalização 1ª etapa preenchida
+pendentes_primeira_janela = int(((~fin1_filled) & (dias_diff <= 2)).sum())
+atrasados_primeira        = int(((~fin1_filled) & (dias_diff >  2)).sum())
 
-# Atrasos e pendências (1ª etapa)
-pendentes_primeira_janela = int(((fin1.isna()) & (dias_diff <= 2)).sum())
-atrasados_primeira        = int(((fin1.isna()) & (dias_diff >  2)).sum())
-
-# Atrasos e pendências (2ª etapa) NOVA LÓGICA
-mask_sem_final = fin2.isna()
+# Atrasos e pendências (2ª etapa) — base = quem NÃO tem finalização geral preenchida
+mask_sem_final = ~fin2_filled
 pendentes_segunda = int((mask_sem_final & (dias_diff <= 7)).sum())
 atrasados_segunda = int((mask_sem_final & (dias_diff > 7)).sum())
 
@@ -584,26 +589,34 @@ else:
         g["gestor"].fillna("Sem gestor").astype(str).str.strip()
          .replace({"": "Sem gestor", "nan": "Sem gestor", "None": "Sem gestor"})
     )
-    fin2 = pd.to_datetime(g["finalizado_final"], errors="coerce")
+
+    # usa o mesmo helper de "preenchido"
+    def is_filled(series: pd.Series) -> pd.Series:
+        s = series.astype(str).str.strip()
+        s_low = s.str.lower()
+        empty = s_low.isin(["", "nan", "none", "null", "nat"])
+        return ~empty
+
     # mesma referência de "hoje_date" já criada no bloco de métricas
     d1_tab   = pd.to_datetime(g["data_primeiro_contato"], errors="coerce")
     d1_tab   = pd.to_datetime(d1_tab.dt.date, errors="coerce")   # normaliza p/ data (naive)
     dias_tab = (pd.Timestamp(hoje_date) - d1_tab).dt.days
     dias_tab = dias_tab.clip(lower=0)  # evita negativos caso haja datas futuras
 
-    mask_sem_final = fin2.isna()
+    fin2_filled_tab = is_filled(g["finalizado_final"])
+    mask_sem_final  = ~fin2_filled_tab
+
     pend2_mask = mask_sem_final & (dias_tab <= 7)   # <=7 dias = Pendente 2ª etapa
     atr2_mask  = mask_sem_final & (dias_tab > 7)    #  >7 dias = Atrasado  2ª etapa
-    fin2_ok    = fin2.notna()
+    fin2_ok    = fin2_filled_tab
 
     base_tab = pd.DataFrame({
-    "Gestor": gestor_norm,
-    "Total de alunos": 1,
-    "Pendentes Geral": pend2_mask.astype(int),
-    "Atrasados Geral": atr2_mask.astype(int),
-    "Finalizados Geral": fin2_ok.astype(int),
+        "Gestor": gestor_norm,
+        "Total de alunos": 1,
+        "Pendentes Geral":  pend2_mask.astype(int),
+        "Atrasados Geral":  atr2_mask.astype(int),
+        "Finalizados Geral": fin2_ok.astype(int),
     })
-
 
     tabela_gestores = (
         base_tab.groupby("Gestor", as_index=False)
@@ -619,3 +632,4 @@ else:
         file_name="resumo_gestores_2a_etapa.csv",
         mime="text/csv",
     )
+
