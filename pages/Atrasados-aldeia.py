@@ -1,19 +1,23 @@
-# pages/Atrasados.py
+# pages/Atrasados-aldeia.py
 import os
 from pathlib import Path
 import pandas as pd
 import streamlit as st
 from google.cloud import bigquery
 from google.oauth2 import service_account
-import altair as alt  # ainda útil se quiser
 from streamlit_echarts import st_echarts
 
 # ========= Config =========
-st.set_page_config(page_title="Analyzer — Atrasados", layout="wide")
+st.set_page_config(page_title="Analyzer — Atrasados (Aldeia)", layout="wide")
 
 PROJECT_ID   = "leads-ts"
-MEMBROS_FQN  = "`leads-ts.Analyzer.membros_2025_s`"
+# >>> usa a base Aldeia
+MEMBROS_FQN  = "`leads-ts.Analyzer.aldeia_2025_s`"
 TZ           = "America/Sao_Paulo"
+
+# ========= Paleta =========
+ACCENT_GREEN = "#C9E34F"   # usado em cards e outros se quiser
+ACCENT_RED   = "#F87171"   # vermelho suave p/ o gráfico solicitado
 
 # ========= CSS externo =========
 def load_css(*files: str):
@@ -35,13 +39,15 @@ cache_bust = f"{st.session_state.refresh_key}"
 
 st.sidebar.divider()
 st.sidebar.markdown('<div class="sb-box">', unsafe_allow_html=True)
-if st.sidebar.button("🏠 Home", use_container_width=True, key="nav_home_btn_atr"):
-    st.switch_page("main.py")
-if st.sidebar.button("📈 Análise de Membros", use_container_width=True, key="nav_membros_btn_atr"):
-    st.switch_page("pages/Analise.py")  # <-- ajustado (antes: pages/Tela2.py)
-st.sidebar.button("⛔ Atrasados", use_container_width=True, key="nav_atrasados_btn_atr_disabled", disabled=True)
-st.sidebar.markdown('</div>', unsafe_allow_html=True)
 
+# ✅ Navegação corrigida para as páginas da ALDEIA
+if st.sidebar.button("🏠 Home", use_container_width=True, key="nav_home_btn_atr"):
+    st.switch_page("pages/analyzer-aldeia.py")
+if st.sidebar.button("📈 Análise de Membros", use_container_width=True, key="nav_membros_btn_atr"):
+    st.switch_page("pages/Analise-aldeia.py")
+st.sidebar.button("⛔ Atrasados", use_container_width=True, key="nav_atrasados_btn_atr_disabled", disabled=True)
+
+st.sidebar.markdown('</div>', unsafe_allow_html=True)
 st.sidebar.divider()
 
 auth_mode = "secrets" if "gcp_service_account" in st.secrets else (
@@ -81,11 +87,11 @@ def _on_toggle_adicional():
 # ===== Header =====
 hdr_l, hdr_r = st.columns([8, 4], gap="medium")
 with hdr_l:
-    st.title("⛔ Atrasados (TRIBO)")
+    st.title("⛔ Atrasados (ALDEIA)")
 with hdr_r:
-    # 🔁 Botão para mudar de TRIBO -> ALDEIA (Atrasados)
-    if st.button("🔁 Modo Aldeia", use_container_width=True, key="btn_modo_aldeia_hdr_atr"):
-        st.switch_page("pages/Atrasados-aldeia.py")
+    # ↩️ Botão para mudar de ALDEIA -> TRIBO (Atrasados)
+    if st.button("↩️ Modo Tribo", use_container_width=True, key="btn_modo_tribo_hdr_atr_aldeia"):
+        st.switch_page("pages/Atrasados.py")
 
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     t1, t2 = st.columns([1, 1], gap="small")
@@ -159,13 +165,18 @@ def run_query(sql: str):
     client = get_bq_client()
     return client.query(sql).result().to_dataframe(create_bqstorage_client=False)
 
+# helper p/ achar coluna de equipe (broker/empresa/…)
+def find_col(dataframe: pd.DataFrame, candidates):
+    cols_lower = {c.lower(): c for c in dataframe.columns}
+    for cand in candidates:
+        if cand.lower() in cols_lower:
+            return cols_lower[cand.lower()]
+    return None
+
 # ========= Dados base =========
+# Usamos SELECT * para tolerar diferenças de esquema entre datasets.
 sql_membros = f"""
-SELECT
-  id, gestor, email, telefone, titularidade,
-  data_primeiro_contato, finalizacao_primeira, finalizado_final,
-  target_sup, status_atraso, updated_at, ingestion_time,
-  late_sup_atraso
+SELECT * 
 FROM {MEMBROS_FQN}
 ORDER BY ingestion_time DESC
 -- cache_bust:{cache_bust}
@@ -182,6 +193,12 @@ _sb_last_placeholder.caption(
     f"🕒 Última atualização: {pd.Timestamp.now(tz=TZ).strftime('%d/%m/%Y %H:%M:%S')}"
 )
 
+# Detecta coluna de Equipe
+BROKER_COL = find_col(df, ["equipe", "broker", "brokers", "corretora", "empresa"])
+# fallback (algumas bases antigas)
+if BROKER_COL is None and "gestor" in df.columns:
+    BROKER_COL = "gestor"
+
 # ========= Filtro por titularidade =========
 def classifica_tit(s: str) -> str:
     if not isinstance(s, str): return "Pagante"
@@ -190,31 +207,28 @@ def classifica_tit(s: str) -> str:
     if ("benef" in s_low) or ("titular" in s_low): return "Pagante"
     return "Pagante"
 
-df["tipo_titularidade"] = df["titularidade"].apply(classifica_tit)
+df["tipo_titularidade"] = df.get("titularidade", "").apply(classifica_tit) if "titularidade" in df.columns else "Pagante"
 tit_choice = st.session_state.get("tit_choice")
 fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
 
-# ========= Métricas base (ALINHADAS COM main.py) =========
-
-# mesma função da Home: considera preenchido tudo que NÃO é "", nan, none, null, nat
+# ========= Métricas base =========
 def is_filled(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip()
     s_low = s.str.lower()
     empty = s_low.isin(["", "nan", "none", "null", "nat"])
     return ~empty
 
-fin1_raw = fdf["finalizacao_primeira"]
-fin2_raw = fdf["finalizado_final"]
-d1_raw   = fdf["data_primeiro_contato"]
+# garante colunas esperadas
+for col in ["finalizacao_primeira", "finalizado_final", "data_primeiro_contato"]:
+    if col not in fdf.columns:
+        fdf[col] = pd.NA
 
-# máscaras de preenchimento (sem parsear datas p/ contar)
-fin1_filled = is_filled(fin1_raw)
-fin2_filled = is_filled(fin2_raw)
+fin1_filled = is_filled(fdf["finalizacao_primeira"])
+fin2_filled = is_filled(fdf["finalizado_final"])
 
-# datas apenas para calcular janelas (quando existentes)
-fin1 = pd.to_datetime(fin1_raw, errors="coerce")
-fin2 = pd.to_datetime(fin2_raw, errors="coerce")
-d1   = pd.to_datetime(d1_raw,   errors="coerce")
+fin1 = pd.to_datetime(fdf["finalizacao_primeira"], errors="coerce")
+fin2 = pd.to_datetime(fdf["finalizado_final"],    errors="coerce")
+d1   = pd.to_datetime(fdf["data_primeiro_contato"], errors="coerce")
 
 d1_norm   = d1.dt.tz_localize(None).dt.normalize()
 fin1_norm = fin1.dt.tz_localize(None).dt.normalize()
@@ -223,36 +237,31 @@ fin2_norm = fin2.dt.tz_localize(None).dt.normalize()
 today    = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 age_days = (today - d1_norm).dt.days  # NaN quando d1 for inválida
 
-# >>> denominador igual ao main.py: total de linhas após filtros
-membros_com_gestor = int(len(fdf))
+membros_com_equipe = int(len(fdf))
 
-# -------- 1ª ETAPA (idêntico ao main.py) --------
+# -------- 1ª ETAPA --------
 atrasados_primeira_mask = (~fin1_filled) & (age_days > 2)
 atrasados_primeira      = int(atrasados_primeira_mask.sum())
-
 resolvidos_atraso_1 = int(
     (fin1_norm.notna() & d1_norm.notna() & ((fin1_norm - d1_norm).dt.days > 2)).sum()
 )
-
 over1_days = (age_days - 2).clip(lower=0)
 ate7_1     = int((atrasados_primeira_mask & over1_days.between(1, 7)).sum())
 de8a14_1   = int((atrasados_primeira_mask & over1_days.between(8, 14)).sum())
 acima15_1  = int((atrasados_primeira_mask & (over1_days >= 15)).sum())
 total_atrasados_1 = resolvidos_atraso_1 + atrasados_primeira
 
-# -------- 2ª ETAPA (idêntico ao main.py) --------
+# -------- 2ª ETAPA --------
 atrasados_segunda_mask = (~fin2_filled) & (age_days > 7)
 atrasados_segunda      = int(atrasados_segunda_mask.sum())
-
 resolvidos_atraso_2 = int(
     (fin2_norm.notna() & d1_norm.notna() & ((fin2_norm - d1_norm).dt.days > 7)).sum()
 )
-total_atrasados_2 = resolvidos_atraso_2 + atrasados_segunda
-
 over2_days = (age_days - 7).clip(lower=0)
 ate7_2     = int((atrasados_segunda_mask & over2_days.between(1, 7)).sum())
 de8a14_2   = int((atrasados_segunda_mask & over2_days.between(8, 14)).sum())
 acima15_2  = int((atrasados_segunda_mask & (over2_days >= 15)).sum())
+total_atrasados_2 = resolvidos_atraso_2 + atrasados_segunda
 
 # ========= Helpers de UI =========
 def fmt_num(n:int) -> str:
@@ -264,7 +273,7 @@ def fmt_pct(n:int, den:int) -> str:
     return f"{(100*float(n)/float(den)):.1f}%"
 
 def kpi_card(title: str, value: int, den: bool = False) -> str:
-    pct = fmt_pct(value, membros_com_gestor) if den else ""
+    pct = fmt_pct(value, membros_com_equipe) if den else ""
     pct_html = f'<span class="kpi-pct">{pct}</span>' if pct else ""
     return f"""
 <div class="kpi-card">
@@ -301,10 +310,7 @@ bottom_html = f"""
 """
 st.markdown(top_html + bottom_html, unsafe_allow_html=True)
 
-# ========= GRÁFICO — Atrasados Geral por Gestor =========
-ACCENT_RED = "#F87171"   # vermelho suave (bom contraste no fundo escuro)
-BAR_COLOR  = ACCENT_RED  # usado como padrão no helper abaixo
-
+# ========= Gráfico — Atrasados (2º Target) por Equipe =========
 def _locked_slider_common():
     return {
         "handleSize": 0, "handleStyle": {"opacity": 0}, "showDetail": False, "brushSelect": False,
@@ -312,7 +318,7 @@ def _locked_slider_common():
         "borderColor": "rgba(255,255,255,0.15)",
     }
 
-def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR, window=6):
+def echarts_vertical_bar(labels, values, window=6, bar_color=ACCENT_RED):
     n = len(labels)
     if n == 0:
         st.info("Sem dados.")
@@ -323,8 +329,7 @@ def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR, window
     options = {
         "backgroundColor": "transparent",
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
-        "title": ({"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}} if title else None),
-        "grid": {"left": 40, "right": 20, "top": 36 if title else 16, "bottom": 80, "containLabel": True},
+        "grid": {"left": 40, "right": 20, "top": 16, "bottom": 80, "containLabel": True},
         "xAxis": {
             "type": "category", "data": labels,
             "axisLabel": {"color": "#E5E7EB", "interval": 0},
@@ -351,38 +356,39 @@ def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR, window
     st_echarts(options=options, height="360px", theme="dark")
 
 st.markdown('<div class="panel" style="margin-top:12px;">', unsafe_allow_html=True)
-# Título visível acima do gráfico (mantém estilo da página)
-st.markdown('<div class="chart-title">Atrasados Geral por Gestor</div>', unsafe_allow_html=True)
+# 👉 Apenas o TÍTULO muda (valores seguem da 2ª etapa)
+st.markdown('<div class="chart-title">Atrasados Geral por Equipe</div>', unsafe_allow_html=True)
 
-if "gestor" in fdf.columns:
-    serie_gestor = (
-        fdf.loc[atrasados_segunda_mask, "gestor"]
-           .fillna("Sem gestor").astype(str).str.strip()
-           .replace({"": "Sem gestor", "nan": "Sem gestor", "None": "Sem gestor"})
+if BROKER_COL:
+    serie_equipe = (
+        fdf[BROKER_COL]
+            .fillna("Sem equipe").astype(str).str.strip()
+            .replace({"": "Sem equipe", "nan": "Sem equipe", "None": "Sem equipe"})
     )
     counts = (
-        serie_gestor.value_counts(dropna=False)
-                    .rename_axis("Gestor").reset_index(name="Quantidade")
+        serie_equipe.value_counts(dropna=False)
+                    .rename_axis("Equipe").reset_index(name="Quantidade")
                     .sort_values("Quantidade", ascending=False)
     )
     if counts.empty:
         st.info("Sem registros atrasados na 2ª etapa para exibir no gráfico.")
     else:
-        labels = counts["Gestor"].tolist()
+        labels = counts["Equipe"].tolist()
         values = counts["Quantidade"].tolist()
-        # cor já vem do default (ACCENT_RED)
-        echarts_vertical_bar(labels, values, title=None, window=6)
+        # barras em vermelho suave para contraste
+        echarts_vertical_bar(labels, values, window=6, bar_color=ACCENT_RED)
 else:
-    st.warning("Coluna 'gestor' não encontrada no dataset retornado.")
+    st.warning("Não encontrei uma coluna de Equipe (broker/corretora/empresa).")
+
 st.markdown('</div>', unsafe_allow_html=True)
 
-# ========= TABELA — Métricas de atraso por Gestor =========
+# ========= TABELA — Métricas de atraso por Equipe =========
 st.markdown('<div class="panel" style="margin-top:12px;">', unsafe_allow_html=True)
 
-if "gestor" in fdf.columns:
-    gestor_norm = (
-        fdf["gestor"].fillna("Sem gestor").astype(str).str.strip()
-           .replace({"": "Sem gestor", "nan": "Sem gestor", "None": "Sem gestor"})
+if BROKER_COL:
+    equipe_norm = (
+        fdf[BROKER_COL].fillna("Sem equipe").astype(str).str.strip()
+           .replace({"": "Sem equipe", "nan": "Sem equipe", "None": "Sem equipe"})
     )
 
     mask1 = atrasados_primeira_mask
@@ -397,7 +403,7 @@ if "gestor" in fdf.columns:
     b2_15plus = (mask2 & (over2_days >= 15)).astype(int)
 
     base = pd.DataFrame({
-        "Gestor": gestor_norm,
+        "Equipe": equipe_norm,
         "Atrasados 1º Target": mask1.astype(int),
         "Atrasados 2º Target": mask2.astype(int),
         "Até 7 dias 1º": b1_ate7,
@@ -409,7 +415,7 @@ if "gestor" in fdf.columns:
     })
 
     tabela = (
-        base.groupby("Gestor", dropna=False, as_index=False).sum(numeric_only=True)
+        base.groupby("Equipe", dropna=False, as_index=False).sum(numeric_only=True)
             .sort_values("Atrasados 2º Target", ascending=False)
     )
 
@@ -417,10 +423,10 @@ if "gestor" in fdf.columns:
     st.download_button(
         "Baixar CSV",
         tabela.to_csv(index=False).encode("utf-8"),
-        file_name="atrasos_por_gestor.csv",
+        file_name="atrasos_por_equipe.csv",
         mime="text/csv",
     )
 else:
-    st.warning("Coluna 'gestor' não encontrada no dataset retornado.")
+    st.warning("Não encontrei uma coluna de Equipe (broker/corretora/empresa).")
 
 st.markdown('</div>', unsafe_allow_html=True)

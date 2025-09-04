@@ -1,4 +1,4 @@
-# pages/Tela2.py
+# pages/Analise-aldeia.py
 import os
 from pathlib import Path
 import textwrap
@@ -9,16 +9,18 @@ from google.oauth2 import service_account
 from streamlit_echarts import st_echarts  # gráficos
 
 # ========= Config =========
-st.set_page_config(page_title="Analyzer — Análise de Membros", layout="wide")
+st.set_page_config(page_title="Analyzer — Análise de Membros (Aldeia)", layout="wide")
 
 PROJECT_ID   = "leads-ts"
-MEMBROS_FQN  = "`leads-ts.Analyzer.membros_2025_s`"
-METAS_FQN    = "`leads-ts.Analyzer.metas_forecast_finalizados`"
+# >>> usa a mesma tabela da Home (Aldeia)
+MEMBROS_FQN  = "`leads-ts.Analyzer.aldeia_2025_s`"
+# >>> nova tabela de metas
+METAS_FQN    = "`leads-ts.Analyzer.metas_aldeia_forecast_finalizados`"
 TZ           = "America/Sao_Paulo"
 
 # ========= Paleta desta página =========
-PRIMARY_BLUE = "#4A6CF7"   # barras azul um pouco mais escuro
-YELLOW_LINE  = "#FACC15"   # linha amarela
+ACCENT_GREEN = "#C9E34F"   # barras em verde (colunas)
+YELLOW_LINE  = "#FACC15"   # linha amarela (meta)
 
 # ========= CSS externo =========
 def load_css(*files: str):
@@ -41,24 +43,22 @@ if st.sidebar.button("🔄 Atualizar agora", use_container_width=True, key="btn_
 st.sidebar.divider()
 st.sidebar.markdown('<div class="sb-box">', unsafe_allow_html=True)
 
-# Home (ativo)
+# ✅ Navegação ajustada para as páginas da ALDEIA
 if st.sidebar.button("🏠 Home", use_container_width=True, key="nav_home_btn_t2"):
-    st.switch_page("main.py")
+    st.switch_page("pages/analyzer-aldeia.py")
 
-# >>> ESTA PÁGINA (desabilitado/escuro)
+# ESTA PÁGINA (desabilitado)
 st.sidebar.button("📈 Análise de Membros", use_container_width=True,
                   key="nav_membros_btn_t2_disabled", disabled=True)
 
-# Atrasados (ativo)
+# Atrasados (Aldeia)
 if st.sidebar.button("⛔ Atrasados", use_container_width=True, key="nav_atrasados_btn_t2"):
-    st.switch_page("pages/Atrasados.py")
+    st.switch_page("pages/Atrasados-aldeia.py")
 
 st.sidebar.markdown('</div>', unsafe_allow_html=True)
-
 st.sidebar.divider()
 st.sidebar.markdown('<div class="sb-grow"></div>', unsafe_allow_html=True)
 
-# Rodapé da sidebar (auth + última atualização via placeholders)
 auth_mode = "secrets" if "gcp_service_account" in st.secrets else (
     "arquivo local" if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") else "desconhecido"
 )
@@ -93,8 +93,12 @@ def _on_toggle_adicional():
 # ===== Header =====
 hdr_l, hdr_r = st.columns([8, 4], gap="medium")
 with hdr_l:
-    st.title("📈 Análise de Membros")
+    st.title("📈 Análise de Membros (ALDEIA)")
 with hdr_r:
+    # ↩️ Botão para mudar de ALDEIA -> TRIBO
+    if st.button("↩️ Modo Tribo", use_container_width=True, key="btn_modo_tribo_hdr_analise_aldeia"):
+        st.switch_page("pages/Analise.py")
+
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     t1, t2 = st.columns([1, 1], gap="small")
     with t1:
@@ -102,11 +106,6 @@ with hdr_r:
     with t2:
         st.toggle("Adicional", key="tog_adicional", on_change=_on_toggle_adicional)
 
-st.markdown("""
-<style>
-section.main div[data-testid="stHorizontalBlock"] .stToggle { transform: scale(.94); }
-</style>
-""", unsafe_allow_html=True)
 
 # ========= BigQuery =========
 def get_bq_client():
@@ -130,12 +129,13 @@ def run_query(sql: str):
 
 cache_bust = f"{st.session_state.refresh_key}"
 
-# ========= Dados de membros =========
+# ========= Dados (Aldeia) =========
+# Observação: não precisamos mais do campo 'gestor'; mantemos colunas usadas nos cálculos.
 sql_membros = f"""
 SELECT
-  id, gestor, email, titularidade,
+  id, email, titularidade,
   data_primeiro_contato, finalizacao_primeira, finalizado_final,
-  target_sup, status_atraso, late_sup_atraso,  -- <<< IMPORTANTE
+  target_sup, status_atraso, late_sup_atraso,
   updated_at, ingestion_time
 FROM {MEMBROS_FQN}
 ORDER BY ingestion_time DESC
@@ -168,11 +168,9 @@ df["tipo_titularidade"] = df["titularidade"].apply(classifica_tit)
 tit_choice = st.session_state.get("tit_choice")
 fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
 
-# ========= KPIs (alinhados ao main.py) =========
-# Base = TODAS as linhas após os filtros (contagem simples)
+# ========= KPIs =========
 base_df = fdf.copy()
-membros_com_gestor = int(len(base_df))
-
+membros_com_equipe = int(len(base_df))   # <<< rótulo usado nos cards
 
 fdf_dt = fdf.copy()
 fin1 = pd.to_datetime(fdf_dt["finalizacao_primeira"], errors="coerce")
@@ -185,36 +183,15 @@ d1_norm    = d1.dt.tz_localize(None).dt.normalize()
 tsup_eff   = target_tbl.fillna(d1_norm + pd.Timedelta(days=7))
 today_naive = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 
-# ---- Lógica da 2ª etapa igual ao main.py (usa 'late_sup_atraso') ----
-late_str = fdf_dt.get("late_sup_atraso")
-if late_str is not None:
-    late_str = late_str.astype(str).str.strip()
-else:
-    late_str = pd.Series("", index=fdf_dt.index)
-
-mask_f2_vazio = fin2.isna()
-
-# ---- Lógica da 2ª etapa (Geral) — baseada em data_primeiro_contato ----
-# Série de datas
-fin2 = pd.to_datetime(fdf_dt["finalizado_final"],    errors="coerce")
-d1   = pd.to_datetime(fdf_dt["data_primeiro_contato"], errors="coerce")
-
-# Hoje sem timezone e só a data
+# ---- 2ª etapa (Geral) — baseada em data_primeiro_contato ----
 hoje_date = pd.Timestamp.now(tz=TZ).date()
-
-# Normaliza p/ data (naive) e calcula diferença em dias
 d1_norm    = pd.to_datetime(d1.dt.date, errors="coerce")
-dias_diff  = (pd.Timestamp(hoje_date) - d1_norm).dt.days
-dias_diff  = dias_diff.clip(lower=0)  # evita negativos se houver datas futuras
+dias_diff  = (pd.Timestamp(hoje_date) - d1_norm).dt.days.clip(lower=0)
 
-# Regras: não finalizado + (<=7 dias = Pendente | >7 = Atrasado)
 mask_sem_final    = fin2.isna()
 pendentes_segunda = int((mask_sem_final & (dias_diff <= 7)).sum())
 atrasados_segunda = int((mask_sem_final & (dias_diff > 7)).sum())
-
-# Finalizados (Geral)
 finalizados_geral = int(fin2.notna().sum())
-
 
 def fmt_int(n) -> str:
     try: return f"{int(n):,}".replace(",", ".")
@@ -224,9 +201,9 @@ def fmt_pct(n: int, den: int) -> str | None:
     if not den or den <= 0: return None
     return f"{(100*float(n)/float(den)):.1f}%"
 
-pct_fin  = fmt_pct(finalizados_geral, membros_com_gestor)
-pct_pend = fmt_pct(pendentes_segunda, membros_com_gestor)
-pct_atr  = fmt_pct(atrasados_segunda, membros_com_gestor)
+pct_fin  = fmt_pct(finalizados_geral, membros_com_equipe)
+pct_pend = fmt_pct(pendentes_segunda, membros_com_equipe)
+pct_atr  = fmt_pct(atrasados_segunda, membros_com_equipe)
 
 # ========= Cards =========
 st.markdown("""
@@ -255,13 +232,12 @@ def kpi_card(title: str, value, icon: str = "📈", pct_text: str | None = None)
 
 cards_html = f"""
 <div class="kpi-row">
-{ kpi_card("Membros com gestor", membros_com_gestor, "👥") }
+{ kpi_card("Membros com Equipe", membros_com_equipe, "👥") }
 { kpi_card("Finalizados (Geral)", finalizados_geral,  "✅", pct_fin) }
 { kpi_card("Pendentes (Geral)",  pendentes_segunda, "⚠️", pct_pend) }
 { kpi_card("Atrasados (Geral)",  atrasados_segunda, "⛔", pct_atr) }
 </div>
 """
-
 st.markdown(textwrap.dedent(cards_html).strip(), unsafe_allow_html=True)
 
 st.divider()
@@ -296,73 +272,54 @@ else:
     end_ix   = max(0, n - 1)
 
     options = {
-    "backgroundColor": "transparent",
-    "tooltip": {"trigger": "axis"},
-    "legend": {"data": ["Real acumulado", "Meta acumulada"], "top": 0,
-               "textStyle": {"color": "#E5E7EB"}},
-    # + um pouco mais de espaço embaixo pro label do eixo X e rótulos
-    "grid": {"left": 40, "right": 24, "top": 36, "bottom": 84, "containLabel": True},
-    "xAxis": {"type": "category", "data": labels,
-              "axisLabel": {"color": "#E5E7EB", "interval": 0},
-              "axisLine": {"lineStyle": {"color": "rgba(255,255,255,0.15)"}}},
-    "yAxis": {"type": "value", "axisLabel": {"color": "#A1A1AA"},
-              "splitLine": {"lineStyle": {"color": "rgba(255,255,255,0.06)"}}},
-
-    "dataZoom": [
-        {
-            "type": "slider", "xAxisIndex": 0,
-            "startValue": start_ix, "endValue": end_ix,
-            "zoomLock": True, "minValueSpan": window, "maxValueSpan": window,
-            "bottom": 24, "height": 14,
-            "handleSize": 0, "moveHandleSize": 0,
-            "showDetail": False, "brushSelect": False,
-            "borderColor": "rgba(0,0,0,0)",
-            "backgroundColor": "rgba(255,255,255,0.06)",
-            "fillerColor": "rgba(255,255,255,0.28)",
-        },
-        {
-            "type": "inside", "xAxisIndex": 0,
-            "startValue": start_ix, "endValue": end_ix,
-            "zoomLock": True, "minValueSpan": window, "maxValueSpan": window,
-            "zoomOnMouseWheel": False, "moveOnMouseWheel": False, "moveOnMouseMove": False,
-        },
-    ],
-
-    "series": [
-    {  # Barras (Real) COM rótulo
-        "name": "Real acumulado",
-        "type": "bar",
-        "data": real,
-        "barMaxWidth": 26,
-        "itemStyle": {"borderRadius": [6,6,0,0], "color": PRIMARY_BLUE},
-        "emphasis": {"itemStyle": {"color": PRIMARY_BLUE}},
-        "label": {
-            "show": True,
-            "position": "top",
-            "fontSize": 11,
-            "color": "#E5E7EB",
-            "formatter": "{c}"
-        },
-        "labelLayout": {"hideOverlap": True}
-    },
-    {  # Linha (Meta) SEM rótulo
-        "name": "Meta acumulada",
-        "type": "line",
-        "data": meta,
-        "smooth": True,
-        "symbol": "circle",
-        "symbolSize": 6,
-        "lineStyle": {"width": 2, "color": YELLOW_LINE},
-        "itemStyle": {"color": YELLOW_LINE},
-        "label": {"show": False},        # <<< desliga os rótulos
-        "endLabel": {"show": False}      # <<< garante que nada apareça no fim
-    },
-],
-
-}
+        "backgroundColor": "transparent",
+        "tooltip": {"trigger": "axis"},
+        "legend": {"data": ["Real acumulado", "Meta acumulada"], "top": 0,
+                   "textStyle": {"color": "#E5E7EB"}},
+        "grid": {"left": 40, "right": 24, "top": 36, "bottom": 84, "containLabel": True},
+        "xAxis": {"type": "category", "data": labels,
+                  "axisLabel": {"color": "#E5E7EB", "interval": 0},
+                  "axisLine": {"lineStyle": {"color": "rgba(255,255,255,0.15)"}}},
+        "yAxis": {"type": "value", "axisLabel": {"color": "#A1A1AA"},
+                  "splitLine": {"lineStyle": {"color": "rgba(255,255,255,0.06)"}}},
+        "dataZoom": [
+            {"type": "slider", "xAxisIndex": 0, "startValue": start_ix, "endValue": end_ix,
+             "zoomLock": True, "minValueSpan": window, "maxValueSpan": window,
+             "bottom": 24, "height": 14, "handleSize": 0, "moveHandleSize": 0,
+             "showDetail": False, "brushSelect": False, "borderColor": "rgba(0,0,0,0)",
+             "backgroundColor": "rgba(255,255,255,0.06)", "fillerColor": "rgba(255,255,255,0.28)"},
+            {"type": "inside", "xAxisIndex": 0, "startValue": start_ix, "endValue": end_ix,
+             "zoomLock": True, "minValueSpan": window, "maxValueSpan": window,
+             "zoomOnMouseWheel": False, "moveOnMouseWheel": False, "moveOnMouseMove": False},
+        ],
+        "series": [
+            {  # Barras (Real) — VERDE
+                "name": "Real acumulado",
+                "type": "bar",
+                "data": real,
+                "barMaxWidth": 26,
+                "itemStyle": {"borderRadius": [6,6,0,0], "color": ACCENT_GREEN},
+                "emphasis": {"itemStyle": {"color": ACCENT_GREEN}},
+                "label": {"show": True, "position": "top", "fontSize": 11, "color": "#E5E7EB", "formatter": "{c}"},
+                "labelLayout": {"hideOverlap": True},
+            },
+            {  # Linha (Meta) — AMARELA
+                "name": "Meta acumulada",
+                "type": "line",
+                "data": meta,
+                "smooth": True,
+                "symbol": "circle",
+                "symbolSize": 6,
+                "lineStyle": {"width": 2, "color": YELLOW_LINE},
+                "itemStyle": {"color": YELLOW_LINE},
+                "label": {"show": False},
+                "endLabel": {"show": False},
+            },
+        ],
+    }
     st_echarts(options=options, height="420px", theme="dark")
 
-st.caption("Barras = Real acumulado (azul) | Linha = Meta acumulada (amarela).")
+st.caption("Barras = Real acumulado (verde) | Linha = Meta acumulada (amarela).")
 
 st.divider()
 
@@ -391,36 +348,42 @@ with col_left:
               .value_counts()
               .reset_index(name="qtd")
               .rename(columns={"index": "tsup"})
-              .sort_values("tsup")
+              .sort_values("tsup")  # cronológico
         )
         g1["label"] = g1["tsup"].dt.strftime("%d/%m")
 
-        # 👉 janela FIXA de 6 dias (com slider travado)
-        n = len(g1)
+        # janela FIXA de 6 dias — scroller começa no INÍCIO
+        n   = len(g1)
         win = min(6, n if n > 0 else 6)
-        s  = max(0, n - win)
-        e  = max(0, n - 1)
+        s   = 0
+        e   = max(0, win - 1)
 
         options_g1 = {
             "backgroundColor": "transparent",
             "tooltip": {"trigger": "axis"},
-            "grid": {"left": 40, "right": 20, "top": 20, "bottom": 60, "containLabel": True},
-            "xAxis": {"type": "category", "data": g1["label"].tolist(),
-                      "axisLabel": {"color": "#E5E7EB", "interval": 0}},
-            "yAxis": {"type": "value", "axisLabel": {"color": "#A1A1AA"},
-                      "splitLine": {"lineStyle": {"color": "rgba(255,255,255,0.06)"}}},
+            # menos margem à esquerda (sem eixo Y)
+            "grid": {"left": 12, "right": 20, "top": 20, "bottom": 56, "containLabel": True},
+            "xAxis": {
+                "type": "category",
+                "data": g1["label"].tolist(),
+                "axisLabel": {"color": "#E5E7EB", "interval": 0},
+                "axisLine": {"lineStyle": {"color": "rgba(255,255,255,0.15)"}}
+            },
+            # remove totalmente o eixo Y
+            "yAxis": {
+                "type": "value",
+                "axisLabel": {"show": False},
+                "axisLine": {"show": False},
+                "axisTick": {"show": False},
+                "splitLine": {"show": False}
+            },
             "dataZoom": [
-                {
-                    "type": "slider", "xAxisIndex": 0,
-                    "startValue": s, "endValue": e,
-                    "zoomLock": True, "minValueSpan": win, "maxValueSpan": win,
-                    "bottom": 12, "height": 12,
-                    "handleSize": 0, "moveHandleSize": 0,
-                    "showDetail": False, "brushSelect": False,
-                    "borderColor": "rgba(0,0,0,0)",
-                    "backgroundColor": "rgba(255,255,255,0.06)",
-                    "fillerColor": "rgba(255,255,255,0.28)",
-                },
+                {"type": "slider", "xAxisIndex": 0, "startValue": s, "endValue": e,
+                 "zoomLock": True, "minValueSpan": win, "maxValueSpan": win,
+                 "bottom": 12, "height": 12, "handleSize": 0, "moveHandleSize": 0,
+                 "showDetail": False, "brushSelect": False,
+                 "borderColor": "rgba(0,0,0,0)", "backgroundColor": "rgba(255,255,255,0.06)",
+                 "fillerColor": "rgba(255,255,255,0.28)"},
                 {"type": "inside", "xAxisIndex": 0, "startValue": s, "endValue": e,
                  "zoomLock": True, "minValueSpan": win, "maxValueSpan": win,
                  "zoomOnMouseWheel": False, "moveOnMouseWheel": False, "moveOnMouseMove": False},
@@ -429,11 +392,12 @@ with col_left:
                 "type": "bar",
                 "data": g1["qtd"].tolist(),
                 "barMaxWidth": 32,
-                "itemStyle": {"borderRadius": [6,6,0,0], "color": PRIMARY_BLUE},
+                "itemStyle": {"borderRadius": [6,6,0,0], "color": ACCENT_GREEN},
                 "label": {"show": True, "position": "top", "color": "#E5E7EB"}
             }],
         }
         st_echarts(options=options_g1, height="360px", theme="dark")
+
 
 # ----- Atrasados por status -----
 with col_right:
@@ -457,13 +421,13 @@ with col_right:
         )
         g2 = status_series.value_counts().reset_index()
         g2.columns = ["status", "qtd"]
-        g2 = g2.sort_values("qtd", ascending=True)
+        g2 = g2.sort_values("qtd", ascending=False)  # 👉 do MAIOR para o MENOR
 
-        # janela fixa de 10 linhas no y
-        n = len(g2)
+        # janela fixa de 10 linhas — scroller inicia no topo (maiores)
+        n   = len(g2)
         win = min(10, n if n > 0 else 10)
-        s  = max(0, n - win)
-        e  = max(0, n - 1)
+        s   = 0
+        e   = max(0, win - 1)
 
         options_g2 = {
             "backgroundColor": "transparent",
@@ -472,21 +436,17 @@ with col_right:
             "xAxis": {"type": "value", "axisLabel": {"show": False},
                       "axisLine": {"show": False}, "axisTick": {"show": False},
                       "splitLine": {"show": False}},
-            "yAxis": {"type": "category", "data": g2["status"].tolist(), "inverse": True,
+            "yAxis": {"type": "category", "data": g2["status"].tolist(),
+                      "inverse": True,  # primeiro item (maior) fica no topo
                       "axisLabel": {"color": "#E5E7EB", "margin": 8},
                       "axisLine": {"show": False}, "axisTick": {"show": False}},
             "dataZoom": [
-                {
-                    "type": "slider", "yAxisIndex": 0,
-                    "startValue": s, "endValue": e,
-                    "zoomLock": True, "minValueSpan": win, "maxValueSpan": win,
-                    "right": 6, "width": 10,
-                    "handleSize": 0, "moveHandleSize": 0,
-                    "showDetail": False, "brushSelect": False,
-                    "backgroundColor": "rgba(255,255,255,0.06)",
-                    "fillerColor": "rgba(255,255,255,0.28)",
-                    "borderColor": "rgba(0,0,0,0)",
-                },
+                {"type": "slider", "yAxisIndex": 0, "startValue": s, "endValue": e,
+                 "zoomLock": True, "minValueSpan": win, "maxValueSpan": win,
+                 "right": 6, "width": 10, "handleSize": 0, "moveHandleSize": 0,
+                 "showDetail": False, "brushSelect": False,
+                 "backgroundColor": "rgba(255,255,255,0.06)",
+                 "fillerColor": "rgba(255,255,255,0.28)", "borderColor": "rgba(0,0,0,0)"},
                 {"type": "inside", "yAxisIndex": 0, "startValue": s, "endValue": e,
                  "zoomLock": True, "minValueSpan": win, "maxValueSpan": win,
                  "zoomOnMouseWheel": False, "moveOnMouseWheel": False, "moveOnMouseMove": False},
@@ -495,9 +455,10 @@ with col_right:
                 "type": "bar",
                 "data": g2["qtd"].tolist(),
                 "barCategoryGap": "35%",
-                "itemStyle": {"borderRadius": [0, 8, 8, 0], "color": PRIMARY_BLUE},
+                "itemStyle": {"borderRadius": [0, 8, 8, 0], "color": ACCENT_GREEN},
                 "label": {"show": True, "position": "right", "color": "#FFFFFF", "fontWeight": "bold"},
             }],
         }
         height = max(300, 38 * min(win, n))
         st_echarts(options=options_g2, height=f"{height}px", theme="dark")
+

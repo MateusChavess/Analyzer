@@ -1,6 +1,7 @@
 # ============================================================
 # Analyzer – Dashboard Streamlit (BigQuery + Altair + ECharts)
-# ========================== TRIBO ============================
+# ============================================================
+
 import os
 import math
 import pandas as pd
@@ -16,33 +17,48 @@ import textwrap
 # 1) CONFIG & STREAMLIT BASE
 # ---------------------------
 PROJECT_ID = "leads-ts"
-TABLE_FQN  = "`leads-ts.Analyzer.membros_2025_s`"   # base TRIBO
+TABLE_FQN  = "`leads-ts.Analyzer.aldeia_2025_s`"
 
-st.set_page_config(page_title="Analyzer", layout="wide")
+st.set_page_config(page_title="Analyzer (ALDEIA)", layout="wide")
 
-# Paletas / estilos visuais
-BAR_COLOR = "#A3A3A3"
+# === PALETAS ===
+ACCENT_GREEN = "#C9E34F"
+ZERO_NAVY = "#0d1323"
+CAL_DARK_RANGE = [
+    ZERO_NAVY,
+    "#0E2F25",
+    "#134C3A",
+    "#1B5E44",
+]
+BAR_COLOR = ACCENT_GREEN
 GREYS = ["#0f172a", "#111827", "#1f2937", "#374151", "#4b5563", "#6b7280", "#9ca3af"]
 
-# =============== SIDEBAR (layout no padrão Aldeia) ===============
+# =============== SIDEBAR (layout) ===============
 st.sidebar.markdown("""
 <style>
 [data-testid="stSidebar"] > div:first-child {
   padding-top: 0.75rem; padding-bottom: 0.75rem;
   height: 100dvh; overflow: hidden; box-sizing: border-box;
 }
+/* Oculta navegação padrão do Streamlit no sidebar */
 div[data-testid="stSidebarNav"],
 div[data-testid="stSidebarNavSearch"] { display: none !important; }
+
 .sb-wrap{ display:flex; flex-direction:column; height:100%; }
 .sb-grow{ flex:1 1 auto; }
 .sb-footer{ padding-top:.25rem; }
+
 .sb-box{
   border:1px solid rgba(255,255,255,.10);
   border-radius:12px; padding:10px; margin:8px 0 12px;
 }
 .sb-box .stButton{ margin:4px 0; }
+
+/* Esconde stButton por padrão; mostra só dentro de .nav-only */
 .sb-box .stButton { display:none !important; }
 .sb-box .nav-only .stButton { display:block !important; }
+
+/* Remove inputs padrão do sidebar */
 [data-testid="stSidebar"] .stTextInput,
 [data-testid="stSidebar"] input[type="text"],
 [data-testid="stSidebar"] [data-baseweb="input"] {
@@ -53,7 +69,6 @@ div[data-testid="stSidebarNavSearch"] { display: none !important; }
 
 st.sidebar.markdown('<div class="sb-wrap">', unsafe_allow_html=True)
 
-# botão atualizar
 if "refresh_key" not in st.session_state:
     st.session_state.refresh_key = 0
 if st.sidebar.button("🔄 Atualizar agora", use_container_width=True, key="btn_refresh_now"):
@@ -61,15 +76,18 @@ if st.sidebar.button("🔄 Atualizar agora", use_container_width=True, key="btn_
 
 st.sidebar.divider()
 
-# navegação
 _nav = st.sidebar.empty()
 with _nav.container():
     st.sidebar.markdown('<div class="sb-box"><div class="nav-only">', unsafe_allow_html=True)
+
     st.sidebar.button("🏠 Home", use_container_width=True, key="nav_home_btn_disabled", disabled=True)
+
+    # Páginas da Aldeia
     if st.sidebar.button("📈 Análise de Membros", use_container_width=True, key="nav_membros_btn"):
-        st.switch_page("pages/Analise.py")
+        st.switch_page("pages/Analise-aldeia.py")
     if st.sidebar.button("⛔ Atrasados", use_container_width=True, key="nav_atrasados_btn"):
-        st.switch_page("pages/Atrasados.py")
+        st.switch_page("pages/Atrasados-aldeia.py")
+
     st.sidebar.markdown('</div></div>', unsafe_allow_html=True)
 
 st.sidebar.divider()
@@ -123,7 +141,9 @@ SELECT
   observacao, boas_vindas, grupos,
   mt5, conta, validacao, corretora,
   finalizacao_primeira, gestao_data, primeira_operacao, finalizado_final,
-  ativacao, cancelamento, gestor, empresa,
+  ativacao, cancelamento,
+  broker,
+  empresa,
   updated_at, ingestion_time
 FROM {TABLE_FQN}
 ORDER BY ingestion_time DESC
@@ -140,21 +160,32 @@ if df.empty:
 last_updated_str = pd.Timestamp.now(tz='America/Sao_Paulo').strftime('%d/%m/%Y %H:%M:%S')
 _sb_last_placeholder.caption(f"🕒 Última atualização: {last_updated_str}")
 
-# ---------------------------
-# 3.1) Estado de filtros (inicializa UMA VEZ)
-# ---------------------------
-st.session_state.setdefault("tit_choice", None)
-if "filters_init" not in st.session_state:
-    st.session_state["flt_gestor_top"] = []
-    st.session_state["flt_turma_top"] = []
-    st.session_state["flt_meses_top"] = []
-    st.session_state["filters_init"] = True
+# acha a coluna de broker caso venha com outro nome
+def find_col(dataframe: pd.DataFrame, candidates):
+    cols_lower = {c.lower(): c for c in dataframe.columns}
+    for cand in candidates:
+        if cand.lower() in cols_lower:
+            return cols_lower[cand.lower()]
+    return None
+
+BROKER_COL = find_col(df, ["broker", "brokers", "corretora", "empresa"])
+
+status_opts = sorted(df["status_atraso"].dropna().astype(str).unique()) if "status_atraso" in df.columns else []
+turma_opts  = sorted(df["turma"].dropna().astype(str).unique()) if "turma" in df.columns else []
+broker_opts = sorted(df[BROKER_COL].dropna().astype(str).unique()) if BROKER_COL else []
 
 # ---------------------------
-# 3.2) HEADER
+# ESTADO
 # ---------------------------
-st.session_state.setdefault("tog_pagante",   st.session_state.get("tit_choice") == "Pagante")
-st.session_state.setdefault("tog_adicional", st.session_state.get("tit_choice") == "Adicional")
+st.session_state.setdefault("status_atraso", [])
+st.session_state.setdefault("turma", [])
+st.session_state.setdefault("broker", [])
+st.session_state.setdefault("meses_label_sel", [])
+st.session_state.setdefault("tit_choice", None)
+
+# --- HEADER + botão "Modo Tribo" + toggles ---
+st.session_state.setdefault("tog_pagante",   st.session_state["tit_choice"] == "Pagante")
+st.session_state.setdefault("tog_adicional", st.session_state["tit_choice"] == "Adicional")
 
 def _on_toggle_pagante():
     if st.session_state["tog_pagante"]:
@@ -172,16 +203,16 @@ def _on_toggle_adicional():
 
 hdr_l, hdr_r = st.columns([8, 4], gap="medium")
 with hdr_l:
-    st.title("📊 Analyzer (TRIBO)")
+    st.title("📊 Analyzer (ALDEIA)")
 with hdr_r:
-    if st.button("🔁 Modo Aldeia", use_container_width=True, key="btn_modo_aldeia_hdr"):
-        st.switch_page("pages/analyzer-aldeia.py")
+    # ✅ Botão para voltar ao modo Tribo (main.py)
+    if st.button("↩️ Modo Tribo", use_container_width=True, key="btn_voltar_tribo_hdr"):
+        st.switch_page("main.py")
+
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     t1, t2 = st.columns([1, 1], gap="small")
-    with t1:
-        st.toggle("Pagante",   key="tog_pagante",   on_change=_on_toggle_pagante)
-    with t2:
-        st.toggle("Adicional", key="tog_adicional", on_change=_on_toggle_adicional)
+    with t1: st.toggle("Pagante",   key="tog_pagante",   on_change=_on_toggle_pagante)
+    with t2: st.toggle("Adicional", key="tog_adicional", on_change=_on_toggle_adicional)
 
 st.markdown("""
 <style>
@@ -190,11 +221,12 @@ section.main div[data-testid="stHorizontalBlock"] .stToggle { transform: scale(.
 """, unsafe_allow_html=True)
 
 # ---------------------------
-# 4) CONTROLES – Gestor, Turma e Meses
+# 4) CONTROLES – Equipe, Turma e Meses (Primeiro Contato)
 # ---------------------------
 st.markdown('<div class="top-controls">', unsafe_allow_html=True)
 
-_dt_all = pd.to_datetime(df["data_primeiro_contato"], errors="coerce")
+# meses disponíveis a partir de data_primeiro_contato
+_dt_all = pd.to_datetime(df["data_primeiro_contato"], errors="coerce") if "data_primeiro_contato" in df.columns else pd.Series([], dtype="datetime64[ns]")
 _periods = sorted(
     _dt_all.dropna().dt.to_period("M").unique().tolist(),
     key=lambda p: (p.year, p.month)
@@ -203,42 +235,47 @@ _periods = sorted(
 MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho",
             "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
 labels = [f"{MESES_PT[p.month-1]} ({p.year})" for p in _periods]
-label_to_period = dict(zip(labels, _periods))
+label_to_period = dict(zip(labels, _periods))  # "Dezembro (2024)" -> Period('2024-12')
 
+# ⚠️ EVITA “CLIQUE DUPLO”: usar as MESMAS chaves do session_state nos widgets
+#    e NÃO sobrescrever esses valores depois.
 c1, c2, c3 = st.columns([2.2, 2.2, 2.2], gap="small")
 
 with c1:
-    st.multiselect(
-        "Gestor",
-        options=sorted(df["gestor"].dropna().astype(str).unique()),
-        key="flt_gestor_top",
-        placeholder="Selecione os gestores",
-    )
+    if BROKER_COL:
+        broker_sel = st.multiselect(
+            "Equipe",
+            options=broker_opts,
+            key="broker",                   # <- chave = session_state["broker"]
+            placeholder="Selecione as equipes",
+        )
+    else:
+        broker_sel = []
+        st.caption("⚠️ Coluna de Equipe não encontrada (procure por 'broker', 'brokers', 'corretora' ou 'empresa').")
+
 with c2:
-    st.multiselect(
+    turma_sel = st.multiselect(
         "Turma",
-        options=sorted(df["turma"].dropna().astype(str).unique()),
-        key="flt_turma_top",
+        options=turma_opts,
+        key="turma",                        # <- chave = session_state["turma"]
         placeholder="Selecione as turmas",
     )
+
 with c3:
-    st.multiselect(
+    meses_label_sel = st.multiselect(
         "Mês (Primeiro Contato)",
         options=labels,
-        key="flt_meses_top",
+        key="meses_label_sel",              # <- chave = session_state["meses_label_sel"]
         placeholder="Selecione os meses",
-        help="Filtra pelo(s) mês(es) da Data de Primeiro Contato!",
+        help="Filtra pelo(s) mês(es) de Data de Primeiro Contato!",
     )
 
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 👇 Lê os valores atuais direto do session_state (sem reescrever)
-gestor_sel        = st.session_state["flt_gestor_top"]
-turma_sel         = st.session_state["flt_turma_top"]
-meses_label_sel   = st.session_state["flt_meses_top"]
+# (NENHUM "st.session_state[...]=..." aqui — deixa o widget controlar o estado)
 
 # ---------------------------
-# 5) FILTROS (Titularidade + Gestor/Turma + Mês)
+# 5) FILTROS (Titularidade + Equipe/Turma + Mês)
 # ---------------------------
 def classifica_tit(s: str) -> str:
     if not isinstance(s, str): return "Pagante"
@@ -247,18 +284,25 @@ def classifica_tit(s: str) -> str:
     if ("benef" in s_low) or ("titular" in s_low): return "Pagante"
     return "Pagante"
 
-df["tipo_titularidade"] = df["titularidade"].apply(classifica_tit)
+df["tipo_titularidade"] = df["titularidade"].apply(classifica_tit) if "titularidade" in df.columns else "Pagante"
 
 tit_choice = st.session_state.get("tit_choice")
 fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante","Adicional") else df.copy()
 
-if gestor_sel:
-    fdf = fdf[fdf["gestor"].astype(str).isin(gestor_sel)]
+# Sanitiza seleções (se opções mudarem, evita valores "fantasma")
+broker_sel = [b for b in st.session_state.get("broker", []) if b in broker_opts]
+turma_sel  = [t for t in st.session_state.get("turma", []) if t in turma_opts]
+meses_sel  = [m for m in st.session_state.get("meses_label_sel", []) if m in labels]
+
+# Equipe / Turma
+if BROKER_COL and broker_sel:
+    fdf = fdf[fdf[BROKER_COL].astype(str).isin(broker_sel)]
 if turma_sel:
     fdf = fdf[fdf["turma"].astype(str).isin(turma_sel)]
 
-if meses_label_sel:
-    _periodos_escolhidos = [label_to_period[l] for l in meses_label_sel if l in label_to_period]
+# Mês (data_primeiro_contato)
+if meses_sel:
+    _periodos_escolhidos = [label_to_period[l] for l in meses_sel if l in label_to_period]
     dcol_period = pd.to_datetime(fdf["data_primeiro_contato"], errors="coerce").dt.to_period("M")
     fdf = fdf[dcol_period.isin(_periodos_escolhidos)]
 
@@ -278,10 +322,10 @@ def is_filled(series: pd.Series) -> pd.Series:
     empty = s_low.isin(["", "nan", "none", "null", "nat"])
     return ~empty
 
-fin1_filled = is_filled(base_df["finalizacao_primeira"])
-fin2_filled = is_filled(base_df["finalizado_final"])
+fin1_filled = is_filled(base_df["finalizacao_primeira"]) if "finalizacao_primeira" in base_df.columns else pd.Series([False]*len(base_df))
+fin2_filled = is_filled(base_df["finalizado_final"])    if "finalizado_final"    in base_df.columns else pd.Series([False]*len(base_df))
 
-d1 = pd.to_datetime(base_df["data_primeiro_contato"], errors="coerce")
+d1 = pd.to_datetime(base_df["data_primeiro_contato"], errors="coerce") if "data_primeiro_contato" in base_df.columns else pd.to_datetime(pd.Series([pd.NaT]*len(base_df)))
 d1_norm = pd.to_datetime(d1.dt.date, errors="coerce")
 dias_diff = (pd.Timestamp(pd.Timestamp.now(tz="America/Sao_Paulo").date()) - d1_norm).dt.days
 dias_diff_num = pd.to_numeric(dias_diff, errors="coerce").fillna(0).clip(lower=0).astype(int)
@@ -374,7 +418,7 @@ col_left, col_right = st.columns([1, 3], gap="large")
 with col_left:
     left_html = f"""
 <div class="solo">
-  {card("Membros com gestor", membros_total, icon="👥")}
+  {card("Aldeia com Equipe", membros_total, icon="👥")}
 </div>
 """
     st.markdown(textwrap.dedent(left_html).strip(), unsafe_allow_html=True)
@@ -410,19 +454,24 @@ st.divider()
 # ---------------------------
 base_kpi = base_df.copy()
 
-# Por gestor
-if not base_kpi.empty and "gestor" in base_kpi.columns:
-    by_gestor = (
-        base_kpi.assign(gestor=base_kpi["gestor"].astype(str).str.strip().replace({"": "—"}))
-                .groupby("gestor", dropna=False)["id"].size()
-                .reset_index(name="membros")
-                .sort_values("membros", ascending=False)
+# ---- Aldeia por Equipe (broker por baixo)
+if BROKER_COL and not base_kpi.empty:
+    by_broker = (
+        base_kpi
+        .assign(_broker=base_kpi[BROKER_COL].astype(str).str.strip().replace({"": "—"}))
+        .groupby("_broker", dropna=False)["id"].size()
+        .reset_index(name="membros")
+        .rename(columns={"_broker": "broker"})
+        .sort_values("membros", ascending=False)
     )
 else:
-    by_gestor = pd.DataFrame(columns=["gestor","membros"])
+    by_broker = pd.DataFrame(columns=["broker","membros"])
 
-# Por turma (exclui adicionais "genéricos")
-EXCLUDE_TURMAS = {"adicional brasil / mundo", "adicional tribo", "adicional"}
+# ---- Aldeia por Turma (exclui adicionais)
+EXCLUDE_TURMAS = {
+    "adicional brasil / mundo", "adicional tribo", "adicional",
+    "aldeia adicional", "adicional aldeia"
+}
 if not base_kpi.empty and "turma" in base_kpi.columns:
     turma_series = base_kpi["turma"].astype(str).str.strip()
     keep_mask = ~turma_series.str.lower().isin(EXCLUDE_TURMAS)
@@ -480,7 +529,11 @@ if "data_primeiro_contato" in base_df.columns and base_df["data_primeiro_contato
         heat = base.mark_rect(stroke="#1f2937", strokeWidth=1).encode(
             x=alt.X("dow_label:N", sort=order_cols, axis=alt.Axis(title=None, labelAngle=0, labelPadding=6, ticks=False)),
             y=alt.Y("week:O", axis=alt.Axis(title=None, ticks=False)),
-            color=alt.Color("qtd:Q", legend=None, scale=alt.Scale(domain=[0, max_q], range=GREYS)),
+            color=alt.Color(
+                "qtd:Q",
+                legend=None,
+                scale=alt.Scale(domain=[0, max_q], range=CAL_DARK_RANGE, clamp=True)
+            ),
             tooltip=[alt.Tooltip("date:T", title="Dia"), alt.Tooltip("qtd:Q", title="Entradas")]
         )
         text = base.mark_text(baseline="middle", fontSize=13, fontWeight=600, color="#E5E7EB").encode(
@@ -502,7 +555,7 @@ else:
 st.divider()
 
 # ============================================================
-# 11) GRÁFICOS DE BARRAS – ECHARTS
+# 11) GRÁFICOS DE BARRAS – ECHARTS (scroller começando no início)
 # ============================================================
 def _locked_slider_common():
     return {
@@ -511,13 +564,16 @@ def _locked_slider_common():
         "borderColor": "rgba(255,255,255,0.15)",
     }
 
-def echarts_horizontal_bar(labels, values, title=None, bar_color=BAR_COLOR):
+def echarts_horizontal_bar(labels, values, title=None, bar_color=ACCENT_GREEN):
     n = len(labels)
     if n == 0:
         st.info("Sem dados."); return
+
     window = min(6, n)
+    # 👉 começar do começo (itens maiores já estão no topo)
     start_idx = 0
     end_idx   = min(window - 1, n - 1)
+
     height_px = max(300, 38 * window)
     options = {
         "backgroundColor": "transparent",
@@ -544,12 +600,13 @@ def echarts_horizontal_bar(labels, values, title=None, bar_color=BAR_COLOR):
         options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
     st_echarts(options=options, height=f"{height_px}px", theme="dark")
 
-def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
+def echarts_vertical_bar(labels, values, title=None, bar_color=ACCENT_GREEN):
     n = len(labels)
     if n == 0:
         st.info("Sem dados."); return
 
     window = min(4, n)
+    # 👉 começar do começo (maiores primeiro)
     start_idx = 0
     end_idx   = min(window - 1, n - 1)
 
@@ -587,14 +644,13 @@ def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
         options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
     st_echarts(options=options, height="360px", theme="dark")
 
-
 # ---------------------------
 # 12) BARRAS LADO A LADO
 # ---------------------------
 bars_left, bars_right = st.columns(2, gap="large")
 
 with bars_left:
-    st.markdown("**Membros por Turma**")
+    st.markdown("**Aldeia por Turma**")
     if not by_turma.empty:
         echarts_horizontal_bar(labels=by_turma["turma"].tolist(), values=by_turma["membros"].tolist())
         st.caption(f"Total de turmas: {len(by_turma)} • role para ver mais")
@@ -602,24 +658,26 @@ with bars_left:
         st.info("Sem dados para montar o gráfico por Turma (após filtros e base).")
 
 with bars_right:
-    st.markdown("**Membros por Gestor**")
-    if not by_gestor.empty:
-        echarts_vertical_bar(labels=by_gestor["gestor"].tolist(), values=by_gestor["membros"].tolist())
-        st.caption(f"Total de gestores: {len(by_gestor)} • role para ver mais")
+    st.markdown("**Aldeia por Equipe**")
+    if BROKER_COL and not by_broker.empty:
+        echarts_vertical_bar(labels=by_broker["broker"].tolist(), values=by_broker["membros"].tolist())
+        st.caption(f"Total de equipes: {len(by_broker)} • role para ver mais")
+    elif not BROKER_COL:
+        st.info("Coluna de Equipe não encontrada (tente criar 'broker', 'brokers', 'corretora' ou 'empresa').")
     else:
-        st.info("Sem dados para montar o gráfico por Gestor (após filtros e base).")
+        st.info("Sem dados para montar o gráfico por Equipe (após filtros e base).")
 
 # ---------------------------
-# 13) TABELA — Resumo por Gestor (2ª etapa)
+# 13) TABELA — Resumo por Equipe (2ª etapa)
 # ---------------------------
-st.subheader("📋 Resumo por Gestor")
-if base_df.empty:
-    st.info("Sem registros na base atual para montar a tabela.")
+st.subheader("📋 Resumo por Equipe")
+if base_df.empty or not BROKER_COL:
+    st.info("Sem registros ou coluna de Equipe ausente para montar a tabela.")
 else:
     g = base_df.copy()
-    gestor_norm = (
-        g["gestor"].fillna("Sem gestor").astype(str).str.strip()
-         .replace({"": "Sem gestor", "nan": "Sem gestor", "None": "Sem gestor"})
+    equipe_norm = (
+        g[BROKER_COL].fillna("Sem equipe").astype(str).str.strip()
+         .replace({"": "Sem equipe", "nan": "Sem equipe", "None": "Sem equipe"})
     )
 
     def is_filled(series: pd.Series) -> pd.Series:
@@ -628,12 +686,12 @@ else:
         empty = s_low.isin(["", "nan", "none", "null", "nat"])
         return ~empty
 
-    d1_tab   = pd.to_datetime(g["data_primeiro_contato"], errors="coerce")
+    d1_tab   = pd.to_datetime(g["data_primeiro_contato"], errors="coerce") if "data_primeiro_contato" in g.columns else pd.to_datetime(pd.Series([pd.NaT]*len(g)))
     d1_tab   = pd.to_datetime(d1_tab.dt.date, errors="coerce")
     dias_tab = (pd.Timestamp(pd.Timestamp.now(tz="America/Sao_Paulo").date()) - d1_tab).dt.days
     dias_tab = pd.to_numeric(dias_tab, errors="coerce").fillna(0).clip(lower=0).astype(int)
 
-    fin2_filled_tab = is_filled(g["finalizado_final"])
+    fin2_filled_tab = is_filled(g["finalizado_final"]) if "finalizado_final" in g.columns else pd.Series([False]*len(g))
     mask_sem_final  = ~fin2_filled_tab
 
     pend2_mask = mask_sem_final & (dias_tab <= 7)
@@ -641,24 +699,24 @@ else:
     fin2_ok    = fin2_filled_tab
 
     base_tab = pd.DataFrame({
-        "Gestor": gestor_norm,
+        "Equipe": equipe_norm,
         "Total de alunos": 1,
         "Pendentes Geral":  pend2_mask.astype(int),
         "Atrasados Geral":  atr2_mask.astype(int),
         "Finalizados Geral": fin2_ok.astype(int),
     })
 
-    tabela_gestores = (
-        base_tab.groupby("Gestor", as_index=False)
+    tabela_brokers = (
+        base_tab.groupby("Equipe", as_index=False)
                 .sum(numeric_only=True)
                 .sort_values(["Atrasados Geral", "Pendentes Geral", "Total de alunos"],
                              ascending=[False, False, False])
     )
 
-    st.dataframe(tabela_gestores, use_container_width=True, hide_index=True)
+    st.dataframe(tabela_brokers, use_container_width=True, hide_index=True)
     st.download_button(
         label="⬇️ Baixar CSV",
-        data=tabela_gestores.to_csv(index=False).encode("utf-8"),
-        file_name="resumo_gestores_2a_etapa.csv",
+        data=tabela_brokers.to_csv(index=False).encode("utf-8"),
+        file_name="resumo_equipes_2a_etapa.csv",
         mime="text/csv",
     )
