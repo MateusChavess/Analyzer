@@ -33,8 +33,12 @@ st.sidebar.markdown('<div class="sb-wrap">', unsafe_allow_html=True)
 
 if "refresh_key" not in st.session_state:
     st.session_state.refresh_key = 0
+
+# ✅ MESMO MODELO DO PRESENCIAIS: incrementa + rerun
 if st.sidebar.button("🔄 Atualizar agora", use_container_width=True, key="btn_refresh_now_atr"):
     st.session_state.refresh_key += 1
+    st.rerun()
+
 cache_bust = f"{st.session_state.refresh_key}"
 
 st.sidebar.divider()
@@ -46,6 +50,10 @@ if st.sidebar.button("🏠 Home", use_container_width=True, key="nav_home_btn_at
 if st.sidebar.button("📈 Análise de Membros", use_container_width=True, key="nav_membros_btn_atr"):
     st.switch_page("pages/Analise-aldeia.py")
 st.sidebar.button("⛔ Atrasados", use_container_width=True, key="nav_atrasados_btn_atr_disabled", disabled=True)
+
+# ✅ NOVO: Presenciais (Aldeia)
+if st.sidebar.button("🎟️ Presenciais", use_container_width=True, key="nav_presenciais_btn_atrasados_aldeia"):
+    st.switch_page("pages/Presenciais-aldeia.py")
 
 st.sidebar.markdown('</div>', unsafe_allow_html=True)
 st.sidebar.divider()
@@ -96,9 +104,11 @@ with hdr_r:
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     t1, t2 = st.columns([1, 1], gap="small")
     with t1:
-        st.toggle("Pagante",   key="tog_pagante",   on_change=_on_toggle_pagante)
+        st.toggle("Pagante", key="tog_pagante", on_change=_on_toggle_pagante)
     with t2:
         st.toggle("Adicional", key="tog_adicional", on_change=_on_toggle_adicional)
+
+st.divider()
 
 
 # ===== Estilo (títulos em var; sem ícones) =====
@@ -174,9 +184,8 @@ def find_col(dataframe: pd.DataFrame, candidates):
     return None
 
 # ========= Dados base =========
-# Usamos SELECT * para tolerar diferenças de esquema entre datasets.
 sql_membros = f"""
-SELECT * 
+SELECT *
 FROM {MEMBROS_FQN}
 ORDER BY ingestion_time DESC
 -- cache_bust:{cache_bust}
@@ -195,7 +204,6 @@ _sb_last_placeholder.caption(
 
 # Detecta coluna de Equipe
 BROKER_COL = find_col(df, ["equipe", "broker", "brokers", "corretora", "empresa"])
-# fallback (algumas bases antigas)
 if BROKER_COL is None and "gestor" in df.columns:
     BROKER_COL = "gestor"
 
@@ -218,7 +226,6 @@ def is_filled(series: pd.Series) -> pd.Series:
     empty = s_low.isin(["", "nan", "none", "null", "nat"])
     return ~empty
 
-# garante colunas esperadas
 for col in ["finalizacao_primeira", "finalizado_final", "data_primeiro_contato"]:
     if col not in fdf.columns:
         fdf[col] = pd.NA
@@ -235,7 +242,7 @@ fin1_norm = fin1.dt.tz_localize(None).dt.normalize()
 fin2_norm = fin2.dt.tz_localize(None).dt.normalize()
 
 today    = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
-age_days = (today - d1_norm).dt.days  # NaN quando d1 for inválida
+age_days = (today - d1_norm).dt.days
 
 membros_com_equipe = int(len(fdf))
 
@@ -356,7 +363,6 @@ def echarts_vertical_bar(labels, values, window=6, bar_color=ACCENT_RED):
     st_echarts(options=options, height="360px", theme="dark")
 
 st.markdown('<div class="panel" style="margin-top:12px;">', unsafe_allow_html=True)
-# 👉 Apenas o TÍTULO muda (valores seguem da 2ª etapa)
 st.markdown('<div class="chart-title">Atrasados Geral por Equipe</div>', unsafe_allow_html=True)
 
 if BROKER_COL:
@@ -375,7 +381,6 @@ if BROKER_COL:
     else:
         labels = counts["Equipe"].tolist()
         values = counts["Quantidade"].tolist()
-        # barras em vermelho suave para contraste
         echarts_vertical_bar(labels, values, window=6, bar_color=ACCENT_RED)
 else:
     st.warning("Não encontrei uma coluna de Equipe (broker/corretora/empresa).")

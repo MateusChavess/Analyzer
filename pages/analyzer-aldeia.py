@@ -69,10 +69,15 @@ div[data-testid="stSidebarNavSearch"] { display: none !important; }
 
 st.sidebar.markdown('<div class="sb-wrap">', unsafe_allow_html=True)
 
+# ---------------------------
+# ✅ BOTÃO DE ATUALIZAR (PADRÃO)
+# ---------------------------
 if "refresh_key" not in st.session_state:
     st.session_state.refresh_key = 0
+
 if st.sidebar.button("🔄 Atualizar agora", use_container_width=True, key="btn_refresh_now"):
     st.session_state.refresh_key += 1
+    st.rerun()
 
 st.sidebar.divider()
 
@@ -87,6 +92,8 @@ with _nav.container():
         st.switch_page("pages/Analise-aldeia.py")
     if st.sidebar.button("⛔ Atrasados", use_container_width=True, key="nav_atrasados_btn"):
         st.switch_page("pages/Atrasados-aldeia.py")
+    if st.sidebar.button("🎟️ Presenciais", use_container_width=True, key="nav_presenciais_btn"):
+        st.switch_page("pages/Presenciais-aldeia.py")
 
     st.sidebar.markdown('</div></div>', unsafe_allow_html=True)
 
@@ -115,6 +122,7 @@ except Exception as e:
     st.error("Falha ao criar o client do BigQuery. Verifique os secrets/JSON.")
     st.exception(e)
     st.stop()
+
 _sb_auth_placeholder.caption(f"🔐 Modo de autenticação: {auth_mode}")
 
 # ---------------------------
@@ -205,7 +213,6 @@ hdr_l, hdr_r = st.columns([8, 4], gap="medium")
 with hdr_l:
     st.title("📊 Analyzer (ALDEIA)")
 with hdr_r:
-    # ✅ Botão para voltar ao modo Tribo (main.py)
     if st.button("↩️ Modo Tribo", use_container_width=True, key="btn_voltar_tribo_hdr"):
         st.switch_page("main.py")
 
@@ -237,8 +244,6 @@ MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho",
 labels = [f"{MESES_PT[p.month-1]} ({p.year})" for p in _periods]
 label_to_period = dict(zip(labels, _periods))  # "Dezembro (2024)" -> Period('2024-12')
 
-# ⚠️ EVITA “CLIQUE DUPLO”: usar as MESMAS chaves do session_state nos widgets
-#    e NÃO sobrescrever esses valores depois.
 c1, c2, c3 = st.columns([2.2, 2.2, 2.2], gap="small")
 
 with c1:
@@ -246,7 +251,7 @@ with c1:
         broker_sel = st.multiselect(
             "Equipe",
             options=broker_opts,
-            key="broker",                   # <- chave = session_state["broker"]
+            key="broker",
             placeholder="Selecione as equipes",
         )
     else:
@@ -257,7 +262,7 @@ with c2:
     turma_sel = st.multiselect(
         "Turma",
         options=turma_opts,
-        key="turma",                        # <- chave = session_state["turma"]
+        key="turma",
         placeholder="Selecione as turmas",
     )
 
@@ -265,14 +270,12 @@ with c3:
     meses_label_sel = st.multiselect(
         "Mês (Primeiro Contato)",
         options=labels,
-        key="meses_label_sel",              # <- chave = session_state["meses_label_sel"]
+        key="meses_label_sel",
         placeholder="Selecione os meses",
         help="Filtra pelo(s) mês(es) de Data de Primeiro Contato!",
     )
 
 st.markdown('</div>', unsafe_allow_html=True)
-
-# (NENHUM "st.session_state[...]=..." aqui — deixa o widget controlar o estado)
 
 # ---------------------------
 # 5) FILTROS (Titularidade + Equipe/Turma + Mês)
@@ -720,3 +723,6 @@ else:
         file_name="resumo_equipes_2a_etapa.csv",
         mime="text/csv",
     )
+
+# fecha wrapper do sidebar (opcional, mas deixa o HTML organizadinho)
+st.sidebar.markdown("</div>", unsafe_allow_html=True)
