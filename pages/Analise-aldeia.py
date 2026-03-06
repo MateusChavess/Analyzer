@@ -6,21 +6,19 @@ import pandas as pd
 import streamlit as st
 from google.cloud import bigquery
 from google.oauth2 import service_account
-from streamlit_echarts import st_echarts  # gráficos
+from streamlit_echarts import st_echarts
 
 # ========= Config =========
 st.set_page_config(page_title="Analyzer — Análise de Membros (Aldeia)", layout="wide")
 
 PROJECT_ID   = "leads-ts"
-# >>> usa a mesma tabela da Home (Aldeia)
-MEMBROS_FQN  = "`leads-ts.Analyzer.aldeia_2025_s`"
-# >>> nova tabela de metas
+MEMBROS_FQN  = "`leads-ts.Analyzer.aldeia_2026_s`"
 METAS_FQN    = "`leads-ts.Analyzer.metas_aldeia_forecast_finalizados`"
 TZ           = "America/Sao_Paulo"
 
 # ========= Paleta desta página =========
-ACCENT_GREEN = "#C9E34F"   # barras em verde (colunas)
-YELLOW_LINE  = "#FACC15"   # linha amarela (meta)
+ACCENT_GREEN = "#C9E34F"
+YELLOW_LINE  = "#FACC15"
 
 # ========= CSS externo =========
 def load_css(*files: str):
@@ -38,7 +36,6 @@ st.sidebar.markdown('<div class="sb-wrap">', unsafe_allow_html=True)
 if "refresh_key" not in st.session_state:
     st.session_state.refresh_key = 0
 
-# ✅ MESMO MODELO DO PRESENCIAIS: incrementa + rerun
 if st.sidebar.button("🔄 Atualizar agora", use_container_width=True, key="btn_refresh_now_analise_aldeia"):
     st.session_state.refresh_key += 1
     st.rerun()
@@ -46,11 +43,9 @@ if st.sidebar.button("🔄 Atualizar agora", use_container_width=True, key="btn_
 st.sidebar.divider()
 st.sidebar.markdown('<div class="sb-box">', unsafe_allow_html=True)
 
-# ✅ Navegação ajustada para as páginas da ALDEIA
 if st.sidebar.button("🏠 Home", use_container_width=True, key="nav_home_btn_analise_aldeia"):
     st.switch_page("pages/analyzer-aldeia.py")
 
-# ESTA PÁGINA (desabilitado)
 st.sidebar.button(
     "📈 Análise de Membros",
     use_container_width=True,
@@ -58,11 +53,9 @@ st.sidebar.button(
     disabled=True
 )
 
-# Atrasados (Aldeia)
 if st.sidebar.button("⛔ Atrasados", use_container_width=True, key="nav_atrasados_btn_analise_aldeia"):
     st.switch_page("pages/Atrasados-aldeia.py")
 
-# ✅ NOVO: Presenciais (Aldeia)
 if st.sidebar.button("🎟️ Presenciais", use_container_width=True, key="nav_presenciais_btn_analise_aldeia"):
     st.switch_page("pages/Presenciais-aldeia.py")
 
@@ -80,7 +73,7 @@ _sb_auth_placeholder.caption(f"🔐 Modo de autenticação: {auth_mode}")
 st.sidebar.markdown('</div>', unsafe_allow_html=True)
 st.sidebar.markdown('</div>', unsafe_allow_html=True)
 
-# ========= TOGGLES (igual Home) =========
+# ========= TOGGLES =========
 st.session_state.setdefault("tit_choice", None)
 st.session_state.setdefault("tog_pagante",   st.session_state["tit_choice"] == "Pagante")
 st.session_state.setdefault("tog_adicional", st.session_state["tit_choice"] == "Adicional")
@@ -101,14 +94,13 @@ def _on_toggle_adicional():
         if st.session_state.get("tit_choice") == "Adicional":
             st.session_state["tit_choice"] = None
 
-# ===== Header (SEM botão "Atualizar dados" no topo) =====
+# ===== Header =====
 hdr_l, hdr_r = st.columns([8, 4], gap="medium")
 
 with hdr_l:
     st.title("📈 Análise de Membros (ALDEIA)")
 
 with hdr_r:
-    # ↩️ Botão para mudar de ALDEIA -> TRIBO
     if st.button("↩️ Modo Tribo", use_container_width=True, key="btn_modo_tribo_hdr_analise_aldeia"):
         st.switch_page("pages/Analise.py")
 
@@ -121,7 +113,6 @@ with hdr_r:
         st.toggle("Adicional", key="tog_adicional", on_change=_on_toggle_adicional)
 
 st.divider()
-
 
 # ========= BigQuery =========
 def get_bq_client():
@@ -164,11 +155,10 @@ if df.empty:
     st.info("Sem registros na tabela.")
     st.stop()
 
-# 👉 Atualiza o carimbo de tempo no rodapé da sidebar
 last_updated_str = pd.Timestamp.now(tz=TZ).strftime('%d/%m/%Y %H:%M:%S')
 _sb_last_placeholder.caption(f"🕒 Última atualização: {last_updated_str}")
 
-# ========= Filtro por titularidade =========
+# ========= Helpers =========
 def classifica_tit(s: str) -> str:
     if not isinstance(s, str):
         return "Pagante"
@@ -179,32 +169,24 @@ def classifica_tit(s: str) -> str:
         return "Pagante"
     return "Pagante"
 
-df["tipo_titularidade"] = df["titularidade"].apply(classifica_tit)
-tit_choice = st.session_state.get("tit_choice")
-fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
+def is_filled(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    s_low = s.str.lower()
+    empty = s_low.isin(["", "nan", "none", "null", "nat"])
+    return ~empty
 
-# ========= KPIs =========
-base_df = fdf.copy()
-membros_com_equipe = int(len(base_df))
-
-fdf_dt = fdf.copy()
-fin1 = pd.to_datetime(fdf_dt["finalizacao_primeira"], errors="coerce")
-fin2 = pd.to_datetime(fdf_dt["finalizado_final"],    errors="coerce")
-d1   = pd.to_datetime(fdf_dt["data_primeiro_contato"], errors="coerce")
-
-target_tbl  = pd.to_datetime(fdf_dt.get("target_sup"), errors="coerce")
-d1_norm     = d1.dt.tz_localize(None).dt.normalize()
-tsup_eff    = target_tbl.fillna(d1_norm + pd.Timedelta(days=7))
-today_naive = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
-
-hoje_date  = pd.Timestamp.now(tz=TZ).date()
-d1_norm_d  = pd.to_datetime(d1.dt.date, errors="coerce")
-dias_diff  = (pd.Timestamp(hoje_date) - d1_norm_d).dt.days.clip(lower=0)
-
-mask_sem_final    = fin2.isna()
-pendentes_segunda = int((mask_sem_final & (dias_diff <= 7)).sum())
-atrasados_segunda = int((mask_sem_final & (dias_diff > 7)).sum())
-finalizados_geral = int(fin2.notna().sum())
+def parse_bq_date(series: pd.Series) -> pd.Series:
+    s = series.astype("string").str.strip()
+    s = s.replace({
+        "": pd.NA,
+        "nan": pd.NA,
+        "None": pd.NA,
+        "none": pd.NA,
+        "null": pd.NA,
+        "NaT": pd.NA,
+        "<NA>": pd.NA
+    })
+    return pd.to_datetime(s, errors="coerce").dt.normalize()
 
 def fmt_int(n) -> str:
     try:
@@ -212,10 +194,37 @@ def fmt_int(n) -> str:
     except:
         return "0"
 
-def fmt_pct(n: int, den: int) -> str | None:
+def fmt_pct(n: int, den: int):
     if not den or den <= 0:
         return None
-    return f"{(100*float(n)/float(den)):.1f}%"
+    return f"{(100 * float(n) / float(den)):.1f}%"
+
+# ========= Filtro por titularidade =========
+df["tipo_titularidade"] = df["titularidade"].apply(classifica_tit)
+tit_choice = st.session_state.get("tit_choice")
+fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
+
+# ========= KPIs =========
+base_df = fdf.copy()
+
+email_ok = is_filled(base_df["email"])
+target_sup_dt = parse_bq_date(base_df["target_sup"])
+fin1_dt = parse_bq_date(base_df["finalizacao_primeira"])
+fin2_dt = parse_bq_date(base_df["finalizado_final"])
+
+fin1_filled = fin1_dt.notna()
+fin2_filled = fin2_dt.notna()
+
+hoje = pd.Timestamp.now(tz=TZ).tz_localize(None).normalize()
+cutoff_primeira = target_sup_dt - pd.Timedelta(days=5)
+
+membros_com_equipe = int(email_ok.sum())
+
+finalizados_geral = int((email_ok & fin2_filled).sum())
+
+mask_base_segunda = email_ok & fin1_filled & (~fin2_filled) & target_sup_dt.notna()
+pendentes_segunda = int((mask_base_segunda & (target_sup_dt >= hoje)).sum())
+atrasados_segunda = int((mask_base_segunda & (target_sup_dt < hoje)).sum())
 
 pct_fin  = fmt_pct(finalizados_geral, membros_com_equipe)
 pct_pend = fmt_pct(pendentes_segunda, membros_com_equipe)
@@ -376,19 +385,18 @@ col_left, col_right = st.columns(2, gap="large")
 # ----- Atrasados por dia (Target SUP) -----
 with col_left:
     st.subheader("⏰ Atrasados por dia (Target SUP)")
-    fin1_dt = pd.to_datetime(fdf_dt["finalizacao_primeira"], errors="coerce")
-    fin2_dt = pd.to_datetime(fdf_dt["finalizado_final"],    errors="coerce")
-    target_tbl = pd.to_datetime(fdf_dt.get("target_sup"), errors="coerce")
-    d1   = pd.to_datetime(fdf_dt["data_primeiro_contato"], errors="coerce")
-    d1_norm = d1.dt.tz_localize(None).dt.normalize()
-    tsup_eff = target_tbl.fillna(d1_norm + pd.Timedelta(days=7))
-    today_naive = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 
-    mask_atrasados = (fin1_dt.notna()) & (fin2_dt.isna()) & (today_naive > tsup_eff)
+    fin1_plot = parse_bq_date(fdf["finalizacao_primeira"])
+    fin2_plot = parse_bq_date(fdf["finalizado_final"])
+    target_plot = parse_bq_date(fdf["target_sup"])
+    hoje_plot = pd.Timestamp.now(tz=TZ).tz_localize(None).normalize()
+
+    mask_atrasados = fin1_plot.notna() & fin2_plot.isna() & target_plot.notna() & (hoje_plot > target_plot)
+
     if not mask_atrasados.any():
         st.info("Nenhum atrasado na janela atual.")
     else:
-        tsup_norm = tsup_eff.dt.tz_localize(None).dt.normalize()
+        tsup_norm = target_plot.dt.normalize()
         g1 = (
             pd.DataFrame({"tsup": tsup_norm[mask_atrasados]})
               .dropna()
@@ -436,7 +444,7 @@ with col_left:
                 "type": "bar",
                 "data": g1["qtd"].tolist(),
                 "barMaxWidth": 32,
-                "itemStyle": {"borderRadius": [6,6,0,0], "color": ACCENT_GREEN},
+                "itemStyle": {"borderRadius": [6, 6, 0, 0], "color": ACCENT_GREEN},
                 "label": {"show": True, "position": "top", "color": "#E5E7EB"}
             }],
         }
@@ -445,23 +453,25 @@ with col_left:
 # ----- Atrasados por status -----
 with col_right:
     st.subheader("🚩 Atrasados por status")
-    fin1_dt = pd.to_datetime(fdf_dt["finalizacao_primeira"], errors="coerce")
-    fin2_dt = pd.to_datetime(fdf_dt["finalizado_final"],    errors="coerce")
-    target_tbl = pd.to_datetime(fdf_dt.get("target_sup"), errors="coerce")
-    d1   = pd.to_datetime(fdf_dt["data_primeiro_contato"], errors="coerce")
-    d1_norm = d1.dt.tz_localize(None).dt.normalize()
-    tsup_eff = target_tbl.fillna(d1_norm + pd.Timedelta(days=7))
-    today_naive = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 
-    mask_atrasados = (fin1_dt.notna()) & (fin2_dt.isna()) & (today_naive > tsup_eff)
+    fin1_plot = parse_bq_date(fdf["finalizacao_primeira"])
+    fin2_plot = parse_bq_date(fdf["finalizado_final"])
+    target_plot = parse_bq_date(fdf["target_sup"])
+    hoje_plot = pd.Timestamp.now(tz=TZ).tz_localize(None).normalize()
+
+    mask_atrasados = fin1_plot.notna() & fin2_plot.isna() & target_plot.notna() & (hoje_plot > target_plot)
+
     if not mask_atrasados.any():
         st.info("Sem atrasados para agrupar por status.")
     else:
         status_series = (
-            fdf_dt.loc[mask_atrasados, "status_atraso"]
-                 .astype(str).str.strip().replace({"": "—"})
-                 .fillna("—")
+            fdf.loc[mask_atrasados, "status_atraso"]
+               .fillna("—")
+               .astype(str)
+               .str.strip()
+               .replace({"": "—", "nan": "—", "None": "—"})
         )
+
         g2 = status_series.value_counts().reset_index()
         g2.columns = ["status", "qtd"]
         g2 = g2.sort_values("qtd", ascending=False)

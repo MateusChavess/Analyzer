@@ -16,7 +16,7 @@ import textwrap
 # 1) CONFIG & STREAMLIT BASE
 # ---------------------------
 PROJECT_ID = "leads-ts"
-TABLE_FQN  = "`leads-ts.Analyzer.membros_2025_s`"   # base TRIBO
+TABLE_FQN  = "`leads-ts.Analyzer.membros_2026_s`"   # base TRIBO
 
 st.set_page_config(page_title="Analyzer", layout="wide")
 
@@ -232,25 +232,27 @@ with c3:
 
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 👇 Lê os valores atuais direto do session_state (sem reescrever)
-gestor_sel        = st.session_state["flt_gestor_top"]
-turma_sel         = st.session_state["flt_turma_top"]
-meses_label_sel   = st.session_state["flt_meses_top"]
+gestor_sel      = st.session_state["flt_gestor_top"]
+turma_sel       = st.session_state["flt_turma_top"]
+meses_label_sel = st.session_state["flt_meses_top"]
 
 # ---------------------------
 # 5) FILTROS (Titularidade + Gestor/Turma + Mês)
 # ---------------------------
 def classifica_tit(s: str) -> str:
-    if not isinstance(s, str): return "Pagante"
+    if not isinstance(s, str):
+        return "Pagante"
     s_low = s.strip().lower()
-    if "adicional" in s_low: return "Adicional"
-    if ("benef" in s_low) or ("titular" in s_low): return "Pagante"
+    if "adicional" in s_low:
+        return "Adicional"
+    if ("benef" in s_low) or ("titular" in s_low):
+        return "Pagante"
     return "Pagante"
 
 df["tipo_titularidade"] = df["titularidade"].apply(classifica_tit)
 
 tit_choice = st.session_state.get("tit_choice")
-fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante","Adicional") else df.copy()
+fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
 
 if gestor_sel:
     fdf = fdf[fdf["gestor"].astype(str).isin(gestor_sel)]
@@ -267,10 +269,9 @@ if fdf.empty:
     st.stop()
 
 # ---------------------------
-# 6) MÉTRICAS
+# 6) MÉTRICAS ✅ AJUSTADAS
 # ---------------------------
 base_df = fdf.copy()
-membros_total = int(len(base_df))
 
 def is_filled(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip()
@@ -278,31 +279,56 @@ def is_filled(series: pd.Series) -> pd.Series:
     empty = s_low.isin(["", "nan", "none", "null", "nat"])
     return ~empty
 
-fin1_filled = is_filled(base_df["finalizacao_primeira"])
-fin2_filled = is_filled(base_df["finalizado_final"])
+def is_valid_gestor(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    s_low = s.str.lower()
+    bad = s_low.isin(["", "nan", "none", "null", "nat", "#ref!", "ref!"])
+    return ~bad
 
-d1 = pd.to_datetime(base_df["data_primeiro_contato"], errors="coerce")
-d1_norm = pd.to_datetime(d1.dt.date, errors="coerce")
-dias_diff = (pd.Timestamp(pd.Timestamp.now(tz="America/Sao_Paulo").date()) - d1_norm).dt.days
-dias_diff_num = pd.to_numeric(dias_diff, errors="coerce").fillna(0).clip(lower=0).astype(int)
+# Base de contagem: email preenchido
+email_ok = is_filled(base_df["email"])
 
-finalizados_primeira   = int(fin1_filled.sum())
-finalizados_geral      = int(fin2_filled.sum())
-nao_conc_primeira_mask = ~fin1_filled
-nao_finalizados_mask   = ~fin2_filled
-pendentes_primeira     = int(nao_conc_primeira_mask.sum())
-nao_finalizados_geral  = int(nao_finalizados_mask.sum())
+# Datas base
+hoje = pd.Timestamp.now(tz="America/Sao_Paulo").tz_localize(None).normalize()
+target_sup_dt = pd.to_datetime(base_df["target_sup"], errors="coerce")
+finalizacao_primeira_dt = pd.to_datetime(base_df["finalizacao_primeira"], errors="coerce")
+finalizado_final_dt = pd.to_datetime(base_df["finalizado_final"], errors="coerce")
 
-pendentes_primeira_janela = int((nao_conc_primeira_mask & (dias_diff_num <= 2)).sum())
-atrasados_primeira        = int((nao_conc_primeira_mask & (dias_diff_num >  2)).sum())
+# Corte da 1ª etapa = target_sup - 5 dias
+cutoff_primeira = target_sup_dt - pd.Timedelta(days=5)
 
-pendentes_segunda = int((nao_finalizados_mask & (dias_diff_num <= 7)).sum())
-atrasados_segunda = int((nao_finalizados_mask & (dias_diff_num > 7)).sum())
+# Flags de conclusão
+fin1_filled = finalizacao_primeira_dt.notna()
+fin2_filled = finalizado_final_dt.notna()
 
-st.session_state['kpi_membros_gestor']    = membros_total
+# KPIs principais
+membros_total = int(email_ok.sum())
+
+gestor_ok = is_valid_gestor(base_df["gestor"])
+membros_com_gestor = int((email_ok & gestor_ok).sum())
+
+finalizados_primeira = int((email_ok & fin1_filled).sum())
+finalizados_geral = int((email_ok & fin2_filled).sum())
+nao_finalizados_geral = int((email_ok & ~fin2_filled).sum())
+
+# 1ª etapa
+mask_base_primeira = email_ok & (~fin1_filled) & cutoff_primeira.notna()
+
+pendentes_primeira = int(mask_base_primeira.sum())
+pendentes_primeira_janela = int((mask_base_primeira & (cutoff_primeira >= hoje)).sum())
+atrasados_primeira = int((mask_base_primeira & (cutoff_primeira < hoje)).sum())
+
+# 2ª etapa
+mask_base_segunda = email_ok & fin1_filled & (~fin2_filled) & target_sup_dt.notna()
+
+pendentes_segunda = int((mask_base_segunda & (target_sup_dt >= hoje)).sum())
+atrasados_segunda = int((mask_base_segunda & (target_sup_dt < hoje)).sum())
+
+# Se você usa isso em outras páginas/trechos
+st.session_state['kpi_membros_gestor'] = membros_com_gestor
 st.session_state['kpi_finalizados_geral'] = finalizados_geral
-st.session_state['kpi_pend2']             = pendentes_segunda
-st.session_state['kpi_atr2']              = atrasados_segunda
+st.session_state['kpi_pend2'] = pendentes_segunda
+st.session_state['kpi_atr2'] = atrasados_segunda
 
 # ---------------------------
 # 7) CSS – KPIs
@@ -337,17 +363,22 @@ CARD_CSS = """
 """
 st.markdown(CARD_CSS, unsafe_allow_html=True)
 
-def fmt_num(n:int) -> str:
-    try: return f"{int(n):,}".replace(",", ".")
-    except: return "0"
+def fmt_num(n: int) -> str:
+    try:
+        return f"{int(n):,}".replace(",", ".")
+    except:
+        return "0"
 
-def fmt_pct(n:int, den:int) -> str:
+def fmt_pct(n: int, den: int) -> str:
     den = max(int(den or 0), 1)
-    return f"{(100*int(n)/den):.1f}%"
+    return f"{(100 * int(n) / den):.1f}%"
 
 def card(title, value, icon="📈", badge_class=None, pct_text=None):
-    badge = (f'<span class="kpi-badge {badge_class}"><span class="kpi-icon">{icon}</span>{title}</span>'
-             if badge_class else f'<span class="kpi-title"><span class="kpi-icon">{icon}</span>{title}</span>')
+    badge = (
+        f'<span class="kpi-badge {badge_class}"><span class="kpi-icon">{icon}</span>{title}</span>'
+        if badge_class else
+        f'<span class="kpi-title"><span class="kpi-icon">{icon}</span>{title}</span>'
+    )
     html = f"""
 <div class="kpi-card">
   <div class="kpi-title">{badge}</div>
@@ -374,7 +405,7 @@ col_left, col_right = st.columns([1, 3], gap="large")
 with col_left:
     left_html = f"""
 <div class="solo">
-  {card("Membros com gestor", membros_total, icon="👥")}
+  {card("Membros com gestor", membros_com_gestor, icon="👥")}
 </div>
 """
     st.markdown(textwrap.dedent(left_html).strip(), unsafe_allow_html=True)
@@ -419,7 +450,7 @@ if not base_kpi.empty and "gestor" in base_kpi.columns:
                 .sort_values("membros", ascending=False)
     )
 else:
-    by_gestor = pd.DataFrame(columns=["gestor","membros"])
+    by_gestor = pd.DataFrame(columns=["gestor", "membros"])
 
 # Por turma (exclui adicionais "genéricos")
 EXCLUDE_TURMAS = {"adicional brasil / mundo", "adicional tribo", "adicional"}
@@ -434,7 +465,7 @@ if not base_kpi.empty and "turma" in base_kpi.columns:
                 .sort_values("membros", ascending=False)
     )
 else:
-    by_turma = pd.DataFrame(columns=["turma","membros"])
+    by_turma = pd.DataFrame(columns=["turma", "membros"])
 
 # ---------------------------
 # 10) Calendário estilizado
@@ -443,13 +474,13 @@ st.subheader("📅 Entradas por dia (Primeiro Contato)")
 if "data_primeiro_contato" in base_df.columns and base_df["data_primeiro_contato"].notna().any():
     ts = pd.to_datetime(base_df["data_primeiro_contato"], errors="coerce").dropna()
     if not ts.empty:
-        hoje = pd.Timestamp.today()
+        hoje_cal = pd.Timestamp.today()
         c1, c2 = st.columns(2)
         MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
-        mes_nome = c1.selectbox("Mês", MESES_PT, index=hoje.month - 1, key="cal_mes")
+        mes_nome = c1.selectbox("Mês", MESES_PT, index=hoje_cal.month - 1, key="cal_mes")
         mes = MESES_PT.index(mes_nome) + 1
-        anos = sorted(ts.dt.year.unique().tolist()) or [hoje.year]
-        ano = c2.selectbox("Ano", anos, index=(anos.index(hoje.year) if hoje.year in anos else 0), key="cal_ano")
+        anos = sorted(ts.dt.year.unique().tolist()) or [hoje_cal.year]
+        ano = c2.selectbox("Ano", anos, index=(anos.index(hoje_cal.year) if hoje_cal.year in anos else 0), key="cal_ano")
 
         start = pd.Timestamp(year=ano, month=mes, day=1)
         end   = start + pd.offsets.MonthEnd(1)
@@ -474,7 +505,8 @@ if "data_primeiro_contato" in base_df.columns and base_df["data_primeiro_contato
         CELL_H  = 64 if n_weeks == 5 else 56
         CHART_H = CELL_H * n_weeks
 
-        max_q = int(cal["qtd"].max()); max_q = max(1, max_q)
+        max_q = int(cal["qtd"].max())
+        max_q = max(1, max_q)
 
         base = alt.Chart(cal).properties(width="container", height=int(CHART_H))
         heat = base.mark_rect(stroke="#1f2937", strokeWidth=1).encode(
@@ -506,15 +538,20 @@ st.divider()
 # ============================================================
 def _locked_slider_common():
     return {
-        "handleSize": 0, "handleStyle": {"opacity": 0}, "showDetail": False, "brushSelect": False,
-        "fillerColor": "rgba(255,255,255,0.18)", "backgroundColor": "rgba(255,255,255,0.06)",
+        "handleSize": 0,
+        "handleStyle": {"opacity": 0},
+        "showDetail": False,
+        "brushSelect": False,
+        "fillerColor": "rgba(255,255,255,0.18)",
+        "backgroundColor": "rgba(255,255,255,0.06)",
         "borderColor": "rgba(255,255,255,0.15)",
     }
 
 def echarts_horizontal_bar(labels, values, title=None, bar_color=BAR_COLOR):
     n = len(labels)
     if n == 0:
-        st.info("Sem dados."); return
+        st.info("Sem dados.")
+        return
     window = min(6, n)
     start_idx = 0
     end_idx   = min(window - 1, n - 1)
@@ -523,21 +560,51 @@ def echarts_horizontal_bar(labels, values, title=None, bar_color=BAR_COLOR):
         "backgroundColor": "transparent",
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
         "grid": {"left": 0, "right": 96, "top": 6, "bottom": 6, "containLabel": True},
-        "xAxis": {"type": "value","min": 0,"axisLabel": {"show": False},"axisLine": {"show": False},
-                  "axisTick": {"show": False},"splitLine": {"show": False}},
-        "yAxis": {"type": "category","data": labels,"inverse": True,
-                  "axisLabel": {"color": "#E5E7EB", "margin": 8},
-                  "axisLine": {"show": False},"axisTick": {"show": False}},
+        "xAxis": {
+            "type": "value",
+            "min": 0,
+            "axisLabel": {"show": False},
+            "axisLine": {"show": False},
+            "axisTick": {"show": False},
+            "splitLine": {"show": False},
+        },
+        "yAxis": {
+            "type": "category",
+            "data": labels,
+            "inverse": True,
+            "axisLabel": {"color": "#E5E7EB", "margin": 8},
+            "axisLine": {"show": False},
+            "axisTick": {"show": False},
+        },
         "dataZoom": [
-            {"type":"slider","yAxisIndex":0,"startValue":start_idx,"endValue":end_idx,
-             "zoomLock":True,"minValueSpan":window,"maxValueSpan":window,"right":6,"width":12,**_locked_slider_common()},
-            {"type":"inside","yAxisIndex":0,"startValue":start_idx,"endValue":end_idx,
-             "zoomLock":True,"minValueSpan":window,"maxValueSpan":window},
+            {
+                "type": "slider",
+                "yAxisIndex": 0,
+                "startValue": start_idx,
+                "endValue": end_idx,
+                "zoomLock": True,
+                "minValueSpan": window,
+                "maxValueSpan": window,
+                "right": 6,
+                "width": 12,
+                **_locked_slider_common()
+            },
+            {
+                "type": "inside",
+                "yAxisIndex": 0,
+                "startValue": start_idx,
+                "endValue": end_idx,
+                "zoomLock": True,
+                "minValueSpan": window,
+                "maxValueSpan": window
+            },
         ],
         "series": [{
-            "type": "bar","data": values,"barCategoryGap": "35%",
+            "type": "bar",
+            "data": values,
+            "barCategoryGap": "35%",
             "itemStyle": {"color": bar_color, "borderRadius": [0, 8, 8, 0]},
-            "label": {"show": True, "position": "right", "color": "#FFFFFF","fontWeight": "bold","distance": 8},
+            "label": {"show": True, "position": "right", "color": "#FFFFFF", "fontWeight": "bold", "distance": 8},
         }],
     }
     if title:
@@ -547,7 +614,8 @@ def echarts_horizontal_bar(labels, values, title=None, bar_color=BAR_COLOR):
 def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
     n = len(labels)
     if n == 0:
-        st.info("Sem dados."); return
+        st.info("Sem dados.")
+        return
 
     window = min(4, n)
     start_idx = 0
@@ -560,25 +628,36 @@ def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
         "xAxis": {"type": "category", "data": labels, "axisLabel": {"color": "#E5E7EB", "interval": 0}},
         "yAxis": {
             "type": "value",
-            "axisLabel": {"show": False}, "axisLine": {"show": False},
-            "axisTick": {"show": False}, "splitLine": {"show": False},
+            "axisLabel": {"show": False},
+            "axisLine": {"show": False},
+            "axisTick": {"show": False},
+            "splitLine": {"show": False},
         },
         "dataZoom": [
             {
-                "type": "slider", "xAxisIndex": 0,
-                "startValue": start_idx, "endValue": end_idx,
-                "zoomLock": True, "minValueSpan": window, "maxValueSpan": window,
+                "type": "slider",
+                "xAxisIndex": 0,
+                "startValue": start_idx,
+                "endValue": end_idx,
+                "zoomLock": True,
+                "minValueSpan": window,
+                "maxValueSpan": window,
                 "bottom": 24,
                 **_locked_slider_common()
             },
             {
-                "type": "inside", "xAxisIndex": 0,
-                "startValue": start_idx, "endValue": end_idx,
-                "zoomLock": True, "minValueSpan": window, "maxValueSpan": window,
+                "type": "inside",
+                "xAxisIndex": 0,
+                "startValue": start_idx,
+                "endValue": end_idx,
+                "zoomLock": True,
+                "minValueSpan": window,
+                "maxValueSpan": window,
             },
         ],
         "series": [{
-            "type": "bar", "data": values,
+            "type": "bar",
+            "data": values,
             "itemStyle": {"color": bar_color, "borderRadius": [8, 8, 0, 0]},
             "label": {"show": True, "position": "top", "color": "#FFFFFF", "fontWeight": "bold"},
         }],
@@ -586,7 +665,6 @@ def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
     if title:
         options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
     st_echarts(options=options, height="360px", theme="dark")
-
 
 # ---------------------------
 # 12) BARRAS LADO A LADO
@@ -628,31 +706,49 @@ else:
         empty = s_low.isin(["", "nan", "none", "null", "nat"])
         return ~empty
 
-    d1_tab   = pd.to_datetime(g["data_primeiro_contato"], errors="coerce")
-    d1_tab   = pd.to_datetime(d1_tab.dt.date, errors="coerce")
-    dias_tab = (pd.Timestamp(pd.Timestamp.now(tz="America/Sao_Paulo").date()) - d1_tab).dt.days
-    dias_tab = pd.to_numeric(dias_tab, errors="coerce").fillna(0).clip(lower=0).astype(int)
+    email_ok_tab = is_filled(g["email"])
 
-    fin2_filled_tab = is_filled(g["finalizado_final"])
-    mask_sem_final  = ~fin2_filled_tab
+    fin1_dt_tab = pd.to_datetime(g["finalizacao_primeira"], errors="coerce")
+    fin2_dt_tab = pd.to_datetime(g["finalizado_final"], errors="coerce")
+    fin1_filled_tab = fin1_dt_tab.notna()
+    fin2_filled_tab = fin2_dt_tab.notna()
 
-    pend2_mask = mask_sem_final & (dias_tab <= 7)
-    atr2_mask  = mask_sem_final & (dias_tab > 7)
-    fin2_ok    = fin2_filled_tab
+    hoje_tab = pd.Timestamp.now(tz="America/Sao_Paulo").tz_localize(None).normalize()
+    target_tab = pd.to_datetime(g["target_sup"], errors="coerce")
+
+    pend2_mask = (
+        email_ok_tab
+        & fin1_filled_tab
+        & (~fin2_filled_tab)
+        & target_tab.notna()
+        & (target_tab >= hoje_tab)
+    )
+
+    atr2_mask = (
+        email_ok_tab
+        & fin1_filled_tab
+        & (~fin2_filled_tab)
+        & target_tab.notna()
+        & (target_tab < hoje_tab)
+    )
+
+    fin2_ok = email_ok_tab & fin2_filled_tab
 
     base_tab = pd.DataFrame({
         "Gestor": gestor_norm,
-        "Total de alunos": 1,
-        "Pendentes Geral":  pend2_mask.astype(int),
-        "Atrasados Geral":  atr2_mask.astype(int),
+        "Total de alunos": email_ok_tab.astype(int),
+        "Pendentes Geral": pend2_mask.astype(int),
+        "Atrasados Geral": atr2_mask.astype(int),
         "Finalizados Geral": fin2_ok.astype(int),
     })
 
     tabela_gestores = (
         base_tab.groupby("Gestor", as_index=False)
                 .sum(numeric_only=True)
-                .sort_values(["Atrasados Geral", "Pendentes Geral", "Total de alunos"],
-                             ascending=[False, False, False])
+                .sort_values(
+                    ["Atrasados Geral", "Pendentes Geral", "Total de alunos"],
+                    ascending=[False, False, False]
+                )
     )
 
     st.dataframe(tabela_gestores, use_container_width=True, hide_index=True)

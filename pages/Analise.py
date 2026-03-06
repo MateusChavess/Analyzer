@@ -12,7 +12,7 @@ from streamlit_echarts import st_echarts  # gráficos
 st.set_page_config(page_title="Analyzer — Análise de Membros", layout="wide")
 
 PROJECT_ID   = "leads-ts"
-MEMBROS_FQN  = "`leads-ts.Analyzer.membros_2025_s`"
+MEMBROS_FQN  = "`leads-ts.Analyzer.membros_2026_s`"
 METAS_FQN    = "`leads-ts.Analyzer.metas_forecast_finalizados`"
 TZ           = "America/Sao_Paulo"
 

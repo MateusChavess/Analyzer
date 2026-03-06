@@ -11,13 +11,12 @@ from streamlit_echarts import st_echarts
 st.set_page_config(page_title="Analyzer — Atrasados (Aldeia)", layout="wide")
 
 PROJECT_ID   = "leads-ts"
-# >>> usa a base Aldeia
-MEMBROS_FQN  = "`leads-ts.Analyzer.aldeia_2025_s`"
+MEMBROS_FQN  = "`leads-ts.Analyzer.aldeia_2026_s`"
 TZ           = "America/Sao_Paulo"
 
 # ========= Paleta =========
-ACCENT_GREEN = "#C9E34F"   # usado em cards e outros se quiser
-ACCENT_RED   = "#F87171"   # vermelho suave p/ o gráfico solicitado
+ACCENT_GREEN = "#C9E34F"
+ACCENT_RED   = "#F87171"
 
 # ========= CSS externo =========
 def load_css(*files: str):
@@ -34,7 +33,6 @@ st.sidebar.markdown('<div class="sb-wrap">', unsafe_allow_html=True)
 if "refresh_key" not in st.session_state:
     st.session_state.refresh_key = 0
 
-# ✅ MESMO MODELO DO PRESENCIAIS: incrementa + rerun
 if st.sidebar.button("🔄 Atualizar agora", use_container_width=True, key="btn_refresh_now_atr"):
     st.session_state.refresh_key += 1
     st.rerun()
@@ -44,14 +42,12 @@ cache_bust = f"{st.session_state.refresh_key}"
 st.sidebar.divider()
 st.sidebar.markdown('<div class="sb-box">', unsafe_allow_html=True)
 
-# ✅ Navegação corrigida para as páginas da ALDEIA
 if st.sidebar.button("🏠 Home", use_container_width=True, key="nav_home_btn_atr"):
     st.switch_page("pages/analyzer-aldeia.py")
 if st.sidebar.button("📈 Análise de Membros", use_container_width=True, key="nav_membros_btn_atr"):
     st.switch_page("pages/Analise-aldeia.py")
 st.sidebar.button("⛔ Atrasados", use_container_width=True, key="nav_atrasados_btn_atr_disabled", disabled=True)
 
-# ✅ NOVO: Presenciais (Aldeia)
 if st.sidebar.button("🎟️ Presenciais", use_container_width=True, key="nav_presenciais_btn_atrasados_aldeia"):
     st.switch_page("pages/Presenciais-aldeia.py")
 
@@ -62,7 +58,6 @@ auth_mode = "secrets" if "gcp_service_account" in st.secrets else (
     "arquivo local" if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") else "desconhecido"
 )
 
-# espaço flexível + rodapé fixo
 st.sidebar.markdown('<div class="sb-grow"></div>', unsafe_allow_html=True)
 st.sidebar.markdown('<div class="sb-footer">', unsafe_allow_html=True)
 _sb_auth_placeholder = st.sidebar.empty()
@@ -97,7 +92,6 @@ hdr_l, hdr_r = st.columns([8, 4], gap="medium")
 with hdr_l:
     st.title("⛔ Atrasados (ALDEIA)")
 with hdr_r:
-    # ↩️ Botão para mudar de ALDEIA -> TRIBO (Atrasados)
     if st.button("↩️ Modo Tribo", use_container_width=True, key="btn_modo_tribo_hdr_atr_aldeia"):
         st.switch_page("pages/Atrasados.py")
 
@@ -110,8 +104,7 @@ with hdr_r:
 
 st.divider()
 
-
-# ===== Estilo (títulos em var; sem ícones) =====
+# ===== Estilo =====
 st.markdown("""
 <style>
 :root{
@@ -175,7 +168,6 @@ def run_query(sql: str):
     client = get_bq_client()
     return client.query(sql).result().to_dataframe(create_bqstorage_client=False)
 
-# helper p/ achar coluna de equipe (broker/empresa/…)
 def find_col(dataframe: pd.DataFrame, candidates):
     cols_lower = {c.lower(): c for c in dataframe.columns}
     for cand in candidates:
@@ -197,87 +189,109 @@ if df.empty:
     st.info("Sem registros na tabela.")
     st.stop()
 
-# 👉 Atualiza carimbo de tempo no rodapé da sidebar
 _sb_last_placeholder.caption(
     f"🕒 Última atualização: {pd.Timestamp.now(tz=TZ).strftime('%d/%m/%Y %H:%M:%S')}"
 )
 
-# Detecta coluna de Equipe
 BROKER_COL = find_col(df, ["equipe", "broker", "brokers", "corretora", "empresa"])
 if BROKER_COL is None and "gestor" in df.columns:
     BROKER_COL = "gestor"
 
-# ========= Filtro por titularidade =========
+# ========= Helpers =========
 def classifica_tit(s: str) -> str:
-    if not isinstance(s, str): return "Pagante"
+    if not isinstance(s, str):
+        return "Pagante"
     s_low = s.strip().lower()
-    if "adicional" in s_low: return "Adicional"
-    if ("benef" in s_low) or ("titular" in s_low): return "Pagante"
+    if "adicional" in s_low:
+        return "Adicional"
+    if ("benef" in s_low) or ("titular" in s_low):
+        return "Pagante"
     return "Pagante"
 
-df["tipo_titularidade"] = df.get("titularidade", "").apply(classifica_tit) if "titularidade" in df.columns else "Pagante"
-tit_choice = st.session_state.get("tit_choice")
-fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
-
-# ========= Métricas base =========
 def is_filled(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip()
     s_low = s.str.lower()
     empty = s_low.isin(["", "nan", "none", "null", "nat"])
     return ~empty
 
-for col in ["finalizacao_primeira", "finalizado_final", "data_primeiro_contato"]:
-    if col not in fdf.columns:
-        fdf[col] = pd.NA
+def parse_bq_date(series: pd.Series) -> pd.Series:
+    s = series.astype("string").str.strip()
+    s = s.replace({
+        "": pd.NA,
+        "nan": pd.NA,
+        "None": pd.NA,
+        "none": pd.NA,
+        "null": pd.NA,
+        "NaT": pd.NA,
+        "<NA>": pd.NA
+    })
+    return pd.to_datetime(s, errors="coerce").dt.normalize()
 
-fin1_filled = is_filled(fdf["finalizacao_primeira"])
-fin2_filled = is_filled(fdf["finalizado_final"])
+# ========= Filtro por titularidade =========
+df["tipo_titularidade"] = df.get("titularidade", "").apply(classifica_tit) if "titularidade" in df.columns else "Pagante"
+tit_choice = st.session_state.get("tit_choice")
+fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
 
-fin1 = pd.to_datetime(fdf["finalizacao_primeira"], errors="coerce")
-fin2 = pd.to_datetime(fdf["finalizado_final"],    errors="coerce")
-d1   = pd.to_datetime(fdf["data_primeiro_contato"], errors="coerce")
+# ========= Métricas base =========
+email_ok = is_filled(fdf["email"]) if "email" in fdf.columns else pd.Series([False] * len(fdf), index=fdf.index)
 
-d1_norm   = d1.dt.tz_localize(None).dt.normalize()
-fin1_norm = fin1.dt.tz_localize(None).dt.normalize()
-fin2_norm = fin2.dt.tz_localize(None).dt.normalize()
+target_sup_dt = parse_bq_date(fdf["target_sup"]) if "target_sup" in fdf.columns else pd.Series([pd.NaT] * len(fdf), index=fdf.index)
+fin1_dt = parse_bq_date(fdf["finalizacao_primeira"]) if "finalizacao_primeira" in fdf.columns else pd.Series([pd.NaT] * len(fdf), index=fdf.index)
+fin2_dt = parse_bq_date(fdf["finalizado_final"]) if "finalizado_final" in fdf.columns else pd.Series([pd.NaT] * len(fdf), index=fdf.index)
 
-today    = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
-age_days = (today - d1_norm).dt.days
+fin1_filled = fin1_dt.notna()
+fin2_filled = fin2_dt.notna()
 
-membros_com_equipe = int(len(fdf))
+today = pd.Timestamp.now(tz=TZ).tz_localize(None).normalize()
+cutoff_primeira = target_sup_dt - pd.Timedelta(days=5)
+
+membros_com_equipe = int(email_ok.sum())
 
 # -------- 1ª ETAPA --------
-atrasados_primeira_mask = (~fin1_filled) & (age_days > 2)
-atrasados_primeira      = int(atrasados_primeira_mask.sum())
-resolvidos_atraso_1 = int(
-    (fin1_norm.notna() & d1_norm.notna() & ((fin1_norm - d1_norm).dt.days > 2)).sum()
-)
-over1_days = (age_days - 2).clip(lower=0)
-ate7_1     = int((atrasados_primeira_mask & over1_days.between(1, 7)).sum())
-de8a14_1   = int((atrasados_primeira_mask & over1_days.between(8, 14)).sum())
-acima15_1  = int((atrasados_primeira_mask & (over1_days >= 15)).sum())
+# em atraso agora
+atrasados_primeira_mask = email_ok & (~fin1_filled) & cutoff_primeira.notna() & (cutoff_primeira < today)
+atrasados_primeira = int(atrasados_primeira_mask.sum())
+
+# resolvidos com atraso
+resolvidos_atraso_1_mask = email_ok & fin1_dt.notna() & cutoff_primeira.notna() & (fin1_dt > cutoff_primeira)
+resolvidos_atraso_1 = int(resolvidos_atraso_1_mask.sum())
+
+# buckets atraso 1ª etapa
+over1_days = (today - cutoff_primeira).dt.days.clip(lower=0)
+ate7_1    = int((atrasados_primeira_mask & over1_days.between(1, 7)).sum())
+de8a14_1  = int((atrasados_primeira_mask & over1_days.between(8, 14)).sum())
+acima15_1 = int((atrasados_primeira_mask & (over1_days >= 15)).sum())
+
 total_atrasados_1 = resolvidos_atraso_1 + atrasados_primeira
 
 # -------- 2ª ETAPA --------
-atrasados_segunda_mask = (~fin2_filled) & (age_days > 7)
-atrasados_segunda      = int(atrasados_segunda_mask.sum())
-resolvidos_atraso_2 = int(
-    (fin2_norm.notna() & d1_norm.notna() & ((fin2_norm - d1_norm).dt.days > 7)).sum()
-)
-over2_days = (age_days - 7).clip(lower=0)
-ate7_2     = int((atrasados_segunda_mask & over2_days.between(1, 7)).sum())
-de8a14_2   = int((atrasados_segunda_mask & over2_days.between(8, 14)).sum())
-acima15_2  = int((atrasados_segunda_mask & (over2_days >= 15)).sum())
+# em atraso agora
+atrasados_segunda_mask = email_ok & fin1_filled & (~fin2_filled) & target_sup_dt.notna() & (target_sup_dt < today)
+atrasados_segunda = int(atrasados_segunda_mask.sum())
+
+# resolvidos com atraso
+resolvidos_atraso_2_mask = email_ok & fin1_filled & fin2_dt.notna() & target_sup_dt.notna() & (fin2_dt > target_sup_dt)
+resolvidos_atraso_2 = int(resolvidos_atraso_2_mask.sum())
+
+# buckets atraso 2ª etapa
+over2_days = (today - target_sup_dt).dt.days.clip(lower=0)
+ate7_2    = int((atrasados_segunda_mask & over2_days.between(1, 7)).sum())
+de8a14_2  = int((atrasados_segunda_mask & over2_days.between(8, 14)).sum())
+acima15_2 = int((atrasados_segunda_mask & (over2_days >= 15)).sum())
+
 total_atrasados_2 = resolvidos_atraso_2 + atrasados_segunda
 
 # ========= Helpers de UI =========
-def fmt_num(n:int) -> str:
-    try: return f"{int(n):,}".replace(",", ".")
-    except: return "0"
+def fmt_num(n: int) -> str:
+    try:
+        return f"{int(n):,}".replace(",", ".")
+    except:
+        return "0"
 
-def fmt_pct(n:int, den:int) -> str:
-    if not den or den <= 0: return ""
-    return f"{(100*float(n)/float(den)):.1f}%"
+def fmt_pct(n: int, den: int) -> str:
+    if not den or den <= 0:
+        return ""
+    return f"{(100 * float(n) / float(den)):.1f}%"
 
 def kpi_card(title: str, value: int, den: bool = False) -> str:
     pct = fmt_pct(value, membros_com_equipe) if den else ""
@@ -367,7 +381,7 @@ st.markdown('<div class="chart-title">Atrasados Geral por Equipe</div>', unsafe_
 
 if BROKER_COL:
     serie_equipe = (
-        fdf[BROKER_COL]
+        fdf.loc[atrasados_segunda_mask, BROKER_COL]
             .fillna("Sem equipe").astype(str).str.strip()
             .replace({"": "Sem equipe", "nan": "Sem equipe", "None": "Sem equipe"})
     )
@@ -399,9 +413,9 @@ if BROKER_COL:
     mask1 = atrasados_primeira_mask
     mask2 = atrasados_segunda_mask
 
-    b1_ate7    = (mask1 & over1_days.between(1, 7)).astype(int)
-    b1_8a14    = (mask1 & over1_days.between(8, 14)).astype(int)
-    b1_15plus  = (mask1 & (over1_days >= 15)).astype(int)
+    b1_ate7   = (mask1 & over1_days.between(1, 7)).astype(int)
+    b1_8a14   = (mask1 & over1_days.between(8, 14)).astype(int)
+    b1_15plus = (mask1 & (over1_days >= 15)).astype(int)
 
     b2_ate7   = (mask2 & over2_days.between(1, 7)).astype(int)
     b2_8a14   = (mask2 & over2_days.between(8, 14)).astype(int)
@@ -421,7 +435,7 @@ if BROKER_COL:
 
     tabela = (
         base.groupby("Equipe", dropna=False, as_index=False).sum(numeric_only=True)
-            .sort_values("Atrasados 2º Target", ascending=False)
+            .sort_values(["Atrasados 2º Target", "Atrasados 1º Target"], ascending=[False, False])
     )
 
     st.dataframe(tabela, use_container_width=True, hide_index=True)

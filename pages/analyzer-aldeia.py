@@ -17,7 +17,7 @@ import textwrap
 # 1) CONFIG & STREAMLIT BASE
 # ---------------------------
 PROJECT_ID = "leads-ts"
-TABLE_FQN  = "`leads-ts.Analyzer.aldeia_2025_s`"
+TABLE_FQN  = "`leads-ts.Analyzer.aldeia_2026_s`"
 
 st.set_page_config(page_title="Analyzer (ALDEIA)", layout="wide")
 
@@ -70,7 +70,7 @@ div[data-testid="stSidebarNavSearch"] { display: none !important; }
 st.sidebar.markdown('<div class="sb-wrap">', unsafe_allow_html=True)
 
 # ---------------------------
-# ✅ BOTÃO DE ATUALIZAR (PADRÃO)
+# BOTÃO DE ATUALIZAR
 # ---------------------------
 if "refresh_key" not in st.session_state:
     st.session_state.refresh_key = 0
@@ -87,7 +87,6 @@ with _nav.container():
 
     st.sidebar.button("🏠 Home", use_container_width=True, key="nav_home_btn_disabled", disabled=True)
 
-    # Páginas da Aldeia
     if st.sidebar.button("📈 Análise de Membros", use_container_width=True, key="nav_membros_btn"):
         st.switch_page("pages/Analise-aldeia.py")
     if st.sidebar.button("⛔ Atrasados", use_container_width=True, key="nav_atrasados_btn"):
@@ -218,8 +217,10 @@ with hdr_r:
 
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     t1, t2 = st.columns([1, 1], gap="small")
-    with t1: st.toggle("Pagante",   key="tog_pagante",   on_change=_on_toggle_pagante)
-    with t2: st.toggle("Adicional", key="tog_adicional", on_change=_on_toggle_adicional)
+    with t1:
+        st.toggle("Pagante", key="tog_pagante", on_change=_on_toggle_pagante)
+    with t2:
+        st.toggle("Adicional", key="tog_adicional", on_change=_on_toggle_adicional)
 
 st.markdown("""
 <style>
@@ -228,11 +229,10 @@ section.main div[data-testid="stHorizontalBlock"] .stToggle { transform: scale(.
 """, unsafe_allow_html=True)
 
 # ---------------------------
-# 4) CONTROLES – Equipe, Turma e Meses (Primeiro Contato)
+# 4) CONTROLES – Equipe, Turma e Meses
 # ---------------------------
 st.markdown('<div class="top-controls">', unsafe_allow_html=True)
 
-# meses disponíveis a partir de data_primeiro_contato
 _dt_all = pd.to_datetime(df["data_primeiro_contato"], errors="coerce") if "data_primeiro_contato" in df.columns else pd.Series([], dtype="datetime64[ns]")
 _periods = sorted(
     _dt_all.dropna().dt.to_period("M").unique().tolist(),
@@ -242,7 +242,7 @@ _periods = sorted(
 MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho",
             "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
 labels = [f"{MESES_PT[p.month-1]} ({p.year})" for p in _periods]
-label_to_period = dict(zip(labels, _periods))  # "Dezembro (2024)" -> Period('2024-12')
+label_to_period = dict(zip(labels, _periods))
 
 c1, c2, c3 = st.columns([2.2, 2.2, 2.2], gap="small")
 
@@ -256,7 +256,7 @@ with c1:
         )
     else:
         broker_sel = []
-        st.caption("⚠️ Coluna de Equipe não encontrada (procure por 'broker', 'brokers', 'corretora' ou 'empresa').")
+        st.caption("⚠️ Coluna de Equipe não encontrada.")
 
 with c2:
     turma_sel = st.multiselect(
@@ -278,32 +278,32 @@ with c3:
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------
-# 5) FILTROS (Titularidade + Equipe/Turma + Mês)
+# 5) FILTROS
 # ---------------------------
 def classifica_tit(s: str) -> str:
-    if not isinstance(s, str): return "Pagante"
+    if not isinstance(s, str):
+        return "Pagante"
     s_low = s.strip().lower()
-    if "adicional" in s_low: return "Adicional"
-    if ("benef" in s_low) or ("titular" in s_low): return "Pagante"
+    if "adicional" in s_low:
+        return "Adicional"
+    if ("benef" in s_low) or ("titular" in s_low):
+        return "Pagante"
     return "Pagante"
 
 df["tipo_titularidade"] = df["titularidade"].apply(classifica_tit) if "titularidade" in df.columns else "Pagante"
 
 tit_choice = st.session_state.get("tit_choice")
-fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante","Adicional") else df.copy()
+fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagante", "Adicional") else df.copy()
 
-# Sanitiza seleções (se opções mudarem, evita valores "fantasma")
 broker_sel = [b for b in st.session_state.get("broker", []) if b in broker_opts]
 turma_sel  = [t for t in st.session_state.get("turma", []) if t in turma_opts]
 meses_sel  = [m for m in st.session_state.get("meses_label_sel", []) if m in labels]
 
-# Equipe / Turma
 if BROKER_COL and broker_sel:
     fdf = fdf[fdf[BROKER_COL].astype(str).isin(broker_sel)]
 if turma_sel:
     fdf = fdf[fdf["turma"].astype(str).isin(turma_sel)]
 
-# Mês (data_primeiro_contato)
 if meses_sel:
     _periodos_escolhidos = [label_to_period[l] for l in meses_sel if l in label_to_period]
     dcol_period = pd.to_datetime(fdf["data_primeiro_contato"], errors="coerce").dt.to_period("M")
@@ -314,10 +314,9 @@ if fdf.empty:
     st.stop()
 
 # ---------------------------
-# 6) MÉTRICAS
+# 6) MÉTRICAS (ALINHADAS AO MAIN.PY)
 # ---------------------------
 base_df = fdf.copy()
-membros_total = int(len(base_df))
 
 def is_filled(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip()
@@ -325,31 +324,75 @@ def is_filled(series: pd.Series) -> pd.Series:
     empty = s_low.isin(["", "nan", "none", "null", "nat"])
     return ~empty
 
-fin1_filled = is_filled(base_df["finalizacao_primeira"]) if "finalizacao_primeira" in base_df.columns else pd.Series([False]*len(base_df))
-fin2_filled = is_filled(base_df["finalizado_final"])    if "finalizado_final"    in base_df.columns else pd.Series([False]*len(base_df))
+def parse_bq_date(series: pd.Series) -> pd.Series:
+    s = series.astype("string").str.strip()
+    s = s.replace({
+        "": pd.NA,
+        "nan": pd.NA,
+        "None": pd.NA,
+        "none": pd.NA,
+        "null": pd.NA,
+        "NaT": pd.NA,
+        "<NA>": pd.NA
+    })
+    return pd.to_datetime(s, errors="coerce").dt.normalize()
 
-d1 = pd.to_datetime(base_df["data_primeiro_contato"], errors="coerce") if "data_primeiro_contato" in base_df.columns else pd.to_datetime(pd.Series([pd.NaT]*len(base_df)))
-d1_norm = pd.to_datetime(d1.dt.date, errors="coerce")
-dias_diff = (pd.Timestamp(pd.Timestamp.now(tz="America/Sao_Paulo").date()) - d1_norm).dt.days
-dias_diff_num = pd.to_numeric(dias_diff, errors="coerce").fillna(0).clip(lower=0).astype(int)
+email_ok = (
+    is_filled(base_df["email"])
+    if "email" in base_df.columns
+    else pd.Series([False] * len(base_df), index=base_df.index)
+)
 
-finalizados_primeira   = int(fin1_filled.sum())
-finalizados_geral      = int(fin2_filled.sum())
-nao_conc_primeira_mask = ~fin1_filled
-nao_finalizados_mask   = ~fin2_filled
-pendentes_primeira     = int(nao_conc_primeira_mask.sum())
-nao_finalizados_geral  = int(nao_finalizados_mask.sum())
+hoje = pd.Timestamp.now(tz="America/Sao_Paulo").tz_localize(None).normalize()
 
-pendentes_primeira_janela = int((nao_conc_primeira_mask & (dias_diff_num <= 2)).sum())
-atrasados_primeira        = int((nao_conc_primeira_mask & (dias_diff_num >  2)).sum())
+target_sup_dt = (
+    parse_bq_date(base_df["target_sup"])
+    if "target_sup" in base_df.columns
+    else pd.Series([pd.NaT] * len(base_df), index=base_df.index)
+)
 
-pendentes_segunda = int((nao_finalizados_mask & (dias_diff_num <= 7)).sum())
-atrasados_segunda = int((nao_finalizados_mask & (dias_diff_num > 7)).sum())
+fin1_dt = (
+    parse_bq_date(base_df["finalizacao_primeira"])
+    if "finalizacao_primeira" in base_df.columns
+    else pd.Series([pd.NaT] * len(base_df), index=base_df.index)
+)
 
-st.session_state['kpi_membros_gestor']    = membros_total
+fin2_dt = (
+    parse_bq_date(base_df["finalizado_final"])
+    if "finalizado_final" in base_df.columns
+    else pd.Series([pd.NaT] * len(base_df), index=base_df.index)
+)
+
+fin1_filled = fin1_dt.notna()
+fin2_filled = fin2_dt.notna()
+
+cutoff_primeira = target_sup_dt - pd.Timedelta(days=5)
+
+membros_total = int(email_ok.sum())
+
+finalizados_primeira = int((email_ok & fin1_filled).sum())
+finalizados_geral = int((email_ok & fin2_filled).sum())
+
+nao_conc_primeira_mask = email_ok & (~fin1_filled)
+nao_finalizados_mask = email_ok & (~fin2_filled)
+
+pendentes_primeira = int(nao_conc_primeira_mask.sum())
+nao_finalizados_geral = int(nao_finalizados_mask.sum())
+
+# 1ª etapa
+mask_base_primeira = email_ok & (~fin1_filled) & target_sup_dt.notna()
+pendentes_primeira_janela = int((mask_base_primeira & (cutoff_primeira >= hoje)).sum())
+atrasados_primeira = int((mask_base_primeira & (cutoff_primeira < hoje)).sum())
+
+# 2ª etapa
+mask_base_segunda = email_ok & fin1_filled & (~fin2_filled) & target_sup_dt.notna()
+pendentes_segunda = int((mask_base_segunda & (target_sup_dt >= hoje)).sum())
+atrasados_segunda = int((mask_base_segunda & (target_sup_dt < hoje)).sum())
+
+st.session_state['kpi_membros_gestor'] = membros_total
 st.session_state['kpi_finalizados_geral'] = finalizados_geral
-st.session_state['kpi_pend2']             = pendentes_segunda
-st.session_state['kpi_atr2']              = atrasados_segunda
+st.session_state['kpi_pend2'] = pendentes_segunda
+st.session_state['kpi_atr2'] = atrasados_segunda
 
 # ---------------------------
 # 7) CSS – KPIs
@@ -385,8 +428,10 @@ CARD_CSS = """
 st.markdown(CARD_CSS, unsafe_allow_html=True)
 
 def fmt_num(n:int) -> str:
-    try: return f"{int(n):,}".replace(",", ".")
-    except: return "0"
+    try:
+        return f"{int(n):,}".replace(",", ".")
+    except:
+        return "0"
 
 def fmt_pct(n:int, den:int) -> str:
     den = max(int(den or 0), 1)
@@ -457,7 +502,6 @@ st.divider()
 # ---------------------------
 base_kpi = base_df.copy()
 
-# ---- Aldeia por Equipe (broker por baixo)
 if BROKER_COL and not base_kpi.empty:
     by_broker = (
         base_kpi
@@ -470,7 +514,6 @@ if BROKER_COL and not base_kpi.empty:
 else:
     by_broker = pd.DataFrame(columns=["broker","membros"])
 
-# ---- Aldeia por Turma (exclui adicionais)
 EXCLUDE_TURMAS = {
     "adicional brasil / mundo", "adicional tribo", "adicional",
     "aldeia adicional", "adicional aldeia"
@@ -495,13 +538,13 @@ st.subheader("📅 Entradas por dia (Primeiro Contato)")
 if "data_primeiro_contato" in base_df.columns and base_df["data_primeiro_contato"].notna().any():
     ts = pd.to_datetime(base_df["data_primeiro_contato"], errors="coerce").dropna()
     if not ts.empty:
-        hoje = pd.Timestamp.today()
+        hoje_cal = pd.Timestamp.today()
         c1, c2 = st.columns(2)
         MESES_PT = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
-        mes_nome = c1.selectbox("Mês", MESES_PT, index=hoje.month - 1, key="cal_mes")
+        mes_nome = c1.selectbox("Mês", MESES_PT, index=hoje_cal.month - 1, key="cal_mes")
         mes = MESES_PT.index(mes_nome) + 1
-        anos = sorted(ts.dt.year.unique().tolist()) or [hoje.year]
-        ano = c2.selectbox("Ano", anos, index=(anos.index(hoje.year) if hoje.year in anos else 0), key="cal_ano")
+        anos = sorted(ts.dt.year.unique().tolist()) or [hoje_cal.year]
+        ano = c2.selectbox("Ano", anos, index=(anos.index(hoje_cal.year) if hoje_cal.year in anos else 0), key="cal_ano")
 
         start = pd.Timestamp(year=ano, month=mes, day=1)
         end   = start + pd.offsets.MonthEnd(1)
@@ -526,7 +569,8 @@ if "data_primeiro_contato" in base_df.columns and base_df["data_primeiro_contato
         CELL_H  = 64 if n_weeks == 5 else 56
         CHART_H = CELL_H * n_weeks
 
-        max_q = int(cal["qtd"].max()); max_q = max(1, max_q)
+        max_q = int(cal["qtd"].max())
+        max_q = max(1, max_q)
 
         base = alt.Chart(cal).properties(width="container", height=int(CHART_H))
         heat = base.mark_rect(stroke="#1f2937", strokeWidth=1).encode(
@@ -558,7 +602,7 @@ else:
 st.divider()
 
 # ============================================================
-# 11) GRÁFICOS DE BARRAS – ECHARTS (scroller começando no início)
+# 11) GRÁFICOS DE BARRAS – ECHARTS
 # ============================================================
 def _locked_slider_common():
     return {
@@ -570,10 +614,10 @@ def _locked_slider_common():
 def echarts_horizontal_bar(labels, values, title=None, bar_color=ACCENT_GREEN):
     n = len(labels)
     if n == 0:
-        st.info("Sem dados."); return
+        st.info("Sem dados.")
+        return
 
     window = min(6, n)
-    # 👉 começar do começo (itens maiores já estão no topo)
     start_idx = 0
     end_idx   = min(window - 1, n - 1)
 
@@ -606,10 +650,10 @@ def echarts_horizontal_bar(labels, values, title=None, bar_color=ACCENT_GREEN):
 def echarts_vertical_bar(labels, values, title=None, bar_color=ACCENT_GREEN):
     n = len(labels)
     if n == 0:
-        st.info("Sem dados."); return
+        st.info("Sem dados.")
+        return
 
     window = min(4, n)
-    # 👉 começar do começo (maiores primeiro)
     start_idx = 0
     end_idx   = min(window - 1, n - 1)
 
@@ -666,7 +710,7 @@ with bars_right:
         echarts_vertical_bar(labels=by_broker["broker"].tolist(), values=by_broker["membros"].tolist())
         st.caption(f"Total de equipes: {len(by_broker)} • role para ver mais")
     elif not BROKER_COL:
-        st.info("Coluna de Equipe não encontrada (tente criar 'broker', 'brokers', 'corretora' ou 'empresa').")
+        st.info("Coluna de Equipe não encontrada.")
     else:
         st.info("Sem dados para montar o gráfico por Equipe (após filtros e base).")
 
@@ -689,31 +733,46 @@ else:
         empty = s_low.isin(["", "nan", "none", "null", "nat"])
         return ~empty
 
-    d1_tab   = pd.to_datetime(g["data_primeiro_contato"], errors="coerce") if "data_primeiro_contato" in g.columns else pd.to_datetime(pd.Series([pd.NaT]*len(g)))
-    d1_tab   = pd.to_datetime(d1_tab.dt.date, errors="coerce")
-    dias_tab = (pd.Timestamp(pd.Timestamp.now(tz="America/Sao_Paulo").date()) - d1_tab).dt.days
-    dias_tab = pd.to_numeric(dias_tab, errors="coerce").fillna(0).clip(lower=0).astype(int)
+    email_ok_tab = is_filled(g["email"])
+    fin1_filled_tab = is_filled(g["finalizacao_primeira"])
+    fin2_filled_tab = is_filled(g["finalizado_final"])
 
-    fin2_filled_tab = is_filled(g["finalizado_final"]) if "finalizado_final" in g.columns else pd.Series([False]*len(g))
-    mask_sem_final  = ~fin2_filled_tab
+    hoje_tab = pd.Timestamp.now(tz="America/Sao_Paulo").tz_localize(None).normalize()
+    target_tab = pd.to_datetime(g["target_sup"], errors="coerce")
 
-    pend2_mask = mask_sem_final & (dias_tab <= 7)
-    atr2_mask  = mask_sem_final & (dias_tab > 7)
-    fin2_ok    = fin2_filled_tab
+    pend2_mask = (
+        email_ok_tab
+        & fin1_filled_tab
+        & (~fin2_filled_tab)
+        & target_tab.notna()
+        & (target_tab >= hoje_tab)
+    )
+
+    atr2_mask = (
+        email_ok_tab
+        & fin1_filled_tab
+        & (~fin2_filled_tab)
+        & target_tab.notna()
+        & (target_tab < hoje_tab)
+    )
+
+    fin2_ok = email_ok_tab & fin2_filled_tab
 
     base_tab = pd.DataFrame({
         "Equipe": equipe_norm,
-        "Total de alunos": 1,
-        "Pendentes Geral":  pend2_mask.astype(int),
-        "Atrasados Geral":  atr2_mask.astype(int),
+        "Total de alunos": email_ok_tab.astype(int),
+        "Pendentes Geral": pend2_mask.astype(int),
+        "Atrasados Geral": atr2_mask.astype(int),
         "Finalizados Geral": fin2_ok.astype(int),
     })
 
     tabela_brokers = (
         base_tab.groupby("Equipe", as_index=False)
                 .sum(numeric_only=True)
-                .sort_values(["Atrasados Geral", "Pendentes Geral", "Total de alunos"],
-                             ascending=[False, False, False])
+                .sort_values(
+                    ["Atrasados Geral", "Pendentes Geral", "Total de alunos"],
+                    ascending=[False, False, False]
+                )
     )
 
     st.dataframe(tabela_brokers, use_container_width=True, hide_index=True)
@@ -724,5 +783,4 @@ else:
         mime="text/csv",
     )
 
-# fecha wrapper do sidebar (opcional, mas deixa o HTML organizadinho)
 st.sidebar.markdown("</div>", unsafe_allow_html=True)

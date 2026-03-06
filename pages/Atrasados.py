@@ -12,7 +12,7 @@ from streamlit_echarts import st_echarts
 st.set_page_config(page_title="Analyzer — Atrasados", layout="wide")
 
 PROJECT_ID   = "leads-ts"
-MEMBROS_FQN  = "`leads-ts.Analyzer.membros_2025_s`"
+MEMBROS_FQN  = "`leads-ts.Analyzer.membros_2026_s`"
 TZ           = "America/Sao_Paulo"
 
 # ========= CSS externo =========
@@ -196,63 +196,89 @@ fdf = df[df["tipo_titularidade"] == tit_choice].copy() if tit_choice in ("Pagant
 
 # ========= Métricas base (ALINHADAS COM main.py) =========
 
-# mesma função da Home: considera preenchido tudo que NÃO é "", nan, none, null, nat
 def is_filled(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip()
     s_low = s.str.lower()
     empty = s_low.isin(["", "nan", "none", "null", "nat"])
     return ~empty
 
+email_ok = is_filled(fdf["email"])
+
 fin1_raw = fdf["finalizacao_primeira"]
 fin2_raw = fdf["finalizado_final"]
-d1_raw   = fdf["data_primeiro_contato"]
+target_raw = fdf["target_sup"]
 
-# máscaras de preenchimento (sem parsear datas p/ contar)
 fin1_filled = is_filled(fin1_raw)
 fin2_filled = is_filled(fin2_raw)
 
-# datas apenas para calcular janelas (quando existentes)
-fin1 = pd.to_datetime(fin1_raw, errors="coerce")
-fin2 = pd.to_datetime(fin2_raw, errors="coerce")
-d1   = pd.to_datetime(d1_raw,   errors="coerce")
+target_dt = pd.to_datetime(target_raw, errors="coerce")
+today = pd.Timestamp.now(tz=TZ).tz_localize(None).normalize()
 
-d1_norm   = d1.dt.tz_localize(None).dt.normalize()
-fin1_norm = fin1.dt.tz_localize(None).dt.normalize()
-fin2_norm = fin2.dt.tz_localize(None).dt.normalize()
+# corte da 1ª etapa = target_sup - 5 dias
+cutoff_primeira = target_dt - pd.Timedelta(days=5)
 
-today    = pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
-age_days = (today - d1_norm).dt.days  # NaN quando d1 for inválida
+# denominador
+membros_com_gestor = int(email_ok.sum())
 
-# >>> denominador igual ao main.py: total de linhas após filtros
-membros_com_gestor = int(len(fdf))
+# -------- 1ª ETAPA --------
+# atrasado 1ª etapa:
+# finalizacao_primeira vazia
+# e target_sup - 5 < hoje
+atrasados_primeira_mask = email_ok & (~fin1_filled) & cutoff_primeira.notna() & (cutoff_primeira < today)
+atrasados_primeira = int(atrasados_primeira_mask.sum())
 
-# -------- 1ª ETAPA (idêntico ao main.py) --------
-atrasados_primeira_mask = (~fin1_filled) & (age_days > 2)
-atrasados_primeira      = int(atrasados_primeira_mask.sum())
+# resolvidos com atraso 1ª etapa:
+# finalizou a 1ª etapa, mas finalizou depois do corte da 1ª etapa
+fin1_dt = pd.to_datetime(fin1_raw, errors="coerce")
+fin1_norm = fin1_dt.dt.tz_localize(None).dt.normalize()
 
 resolvidos_atraso_1 = int(
-    (fin1_norm.notna() & d1_norm.notna() & ((fin1_norm - d1_norm).dt.days > 2)).sum()
+    (
+        email_ok
+        & fin1_norm.notna()
+        & cutoff_primeira.notna()
+        & (fin1_norm > cutoff_primeira)
+    ).sum()
 )
 
-over1_days = (age_days - 2).clip(lower=0)
-ate7_1     = int((atrasados_primeira_mask & over1_days.between(1, 7)).sum())
-de8a14_1   = int((atrasados_primeira_mask & over1_days.between(8, 14)).sum())
-acima15_1  = int((atrasados_primeira_mask & (over1_days >= 15)).sum())
+# buckets 1ª etapa
+over1_days = (today - cutoff_primeira).dt.days.clip(lower=0)
+ate7_1    = int((atrasados_primeira_mask & over1_days.between(1, 7)).sum())
+de8a14_1  = int((atrasados_primeira_mask & over1_days.between(8, 14)).sum())
+acima15_1 = int((atrasados_primeira_mask & (over1_days >= 15)).sum())
+
 total_atrasados_1 = resolvidos_atraso_1 + atrasados_primeira
 
-# -------- 2ª ETAPA (idêntico ao main.py) --------
-atrasados_segunda_mask = (~fin2_filled) & (age_days > 7)
-atrasados_segunda      = int(atrasados_segunda_mask.sum())
+# -------- 2ª ETAPA --------
+# atraso 2ª etapa:
+# 1ª etapa concluída
+# finalizado_final vazio
+# target_sup < hoje
+atrasados_segunda_mask = email_ok & fin1_filled & (~fin2_filled) & target_dt.notna() & (target_dt < today)
+atrasados_segunda = int(atrasados_segunda_mask.sum())
+
+# resolvidos com atraso 2ª etapa:
+# finalizado_final preenchido, mas depois do target_sup
+fin2_dt = pd.to_datetime(fin2_raw, errors="coerce")
+fin2_norm = fin2_dt.dt.tz_localize(None).dt.normalize()
 
 resolvidos_atraso_2 = int(
-    (fin2_norm.notna() & d1_norm.notna() & ((fin2_norm - d1_norm).dt.days > 7)).sum()
+    (
+        email_ok
+        & fin1_filled
+        & fin2_norm.notna()
+        & target_dt.notna()
+        & (fin2_norm > target_dt)
+    ).sum()
 )
+
 total_atrasados_2 = resolvidos_atraso_2 + atrasados_segunda
 
-over2_days = (age_days - 7).clip(lower=0)
-ate7_2     = int((atrasados_segunda_mask & over2_days.between(1, 7)).sum())
-de8a14_2   = int((atrasados_segunda_mask & over2_days.between(8, 14)).sum())
-acima15_2  = int((atrasados_segunda_mask & (over2_days >= 15)).sum())
+# buckets 2ª etapa
+over2_days = (today - target_dt).dt.days.clip(lower=0)
+ate7_2    = int((atrasados_segunda_mask & over2_days.between(1, 7)).sum())
+de8a14_2  = int((atrasados_segunda_mask & over2_days.between(8, 14)).sum())
+acima15_2 = int((atrasados_segunda_mask & (over2_days >= 15)).sum())
 
 # ========= Helpers de UI =========
 def fmt_num(n:int) -> str:
