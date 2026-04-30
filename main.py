@@ -443,10 +443,19 @@ base_kpi = base_df.copy()
 
 # Por gestor
 if not base_kpi.empty and "gestor" in base_kpi.columns:
+    # Garantir que nulos sejam tratados como string antes do agrupamento para evitar NaN no índice/labels
+    temp_gestor = base_kpi.copy()
+    temp_gestor["gestor_label"] = (
+        temp_gestor["gestor"]
+        .fillna("—")
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "—", "None": "—", "": "—"})
+    )
     by_gestor = (
-        base_kpi.assign(gestor=base_kpi["gestor"].astype(str).str.strip().replace({"": "—"}))
-                .groupby("gestor", dropna=False)["id"].size()
+        temp_gestor.groupby("gestor_label", dropna=False)["id"].size()
                 .reset_index(name="membros")
+                .rename(columns={"gestor_label": "gestor"})
                 .sort_values("membros", ascending=False)
     )
 else:
@@ -455,13 +464,21 @@ else:
 # Por turma (exclui adicionais "genéricos")
 EXCLUDE_TURMAS = {"adicional brasil / mundo", "adicional tribo", "adicional"}
 if not base_kpi.empty and "turma" in base_kpi.columns:
-    turma_series = base_kpi["turma"].astype(str).str.strip()
-    keep_mask = ~turma_series.str.lower().isin(EXCLUDE_TURMAS)
+    temp_turma = base_kpi.copy()
+    temp_turma["turma_label"] = (
+        temp_turma["turma"]
+        .fillna("—")
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "—", "None": "—", "": "—"})
+    )
+    
+    keep_mask = ~temp_turma["turma_label"].str.lower().isin(EXCLUDE_TURMAS)
     by_turma = (
-        base_kpi.loc[keep_mask]
-                .assign(turma=turma_series[keep_mask].replace({"": "—"}))
-                .groupby("turma", dropna=False)["id"].size()
+        temp_turma.loc[keep_mask]
+                .groupby("turma_label", dropna=False)["id"].size()
                 .reset_index(name="membros")
+                .rename(columns={"turma_label": "turma"})
                 .sort_values("membros", ascending=False)
     )
 else:
@@ -536,6 +553,18 @@ st.divider()
 # ============================================================
 # 11) GRÁFICOS DE BARRAS – ECHARTS
 # ============================================================
+def sanitize_options(obj):
+    """Garante que não existam NaN ou Infinity no dicionário de opções,
+    substituindo-os por None (que vira null no JSON) ou 0."""
+    if isinstance(obj, dict):
+        return {k: sanitize_options(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_options(i) for i in obj]
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+    return obj
+
 def _locked_slider_common():
     return {
         "handleSize": 0,
@@ -609,7 +638,9 @@ def echarts_horizontal_bar(labels, values, title=None, bar_color=BAR_COLOR):
     }
     if title:
         options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
-    st_echarts(options=options, height=f"{height_px}px", theme="dark")
+    
+    clean_opts = sanitize_options(options)
+    st_echarts(options=clean_opts, height=f"{height_px}px", theme="dark")
 
 def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
     n = len(labels)
@@ -664,7 +695,9 @@ def echarts_vertical_bar(labels, values, title=None, bar_color=BAR_COLOR):
     }
     if title:
         options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
-    st_echarts(options=options, height="360px", theme="dark")
+    
+    clean_opts = sanitize_options(options)
+    st_echarts(options=clean_opts, height="360px", theme="dark")
 
 # ---------------------------
 # 12) BARRAS LADO A LADO
