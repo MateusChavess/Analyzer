@@ -164,6 +164,19 @@ if df.empty:
     st.warning("Nenhum registro encontrado na tabela.")
     st.stop()
 
+# --- FILTRO DE LINHAS VAZIAS ---
+def is_not_empty(val):
+    s = str(val).strip().lower()
+    return s not in ["", "nan", "none", "null", "nat"]
+
+cols_to_check = [c for c in ["nome", "email", "telefone"] if c in df.columns]
+if cols_to_check:
+    mask_valid = df[cols_to_check[0]].apply(is_not_empty)
+    for col in cols_to_check[1:]:
+        mask_valid |= df[col].apply(is_not_empty)
+    df = df[mask_valid].copy()
+# ------------------------------
+
 last_updated_str = pd.Timestamp.now(tz='America/Sao_Paulo').strftime('%d/%m/%Y %H:%M:%S')
 _sb_last_placeholder.caption(f"🕒 Última atualização: {last_updated_str}")
 
@@ -503,12 +516,18 @@ st.divider()
 base_kpi = base_df.copy()
 
 if BROKER_COL and not base_kpi.empty:
+    temp_broker = base_kpi.copy()
+    temp_broker["broker_label"] = (
+        temp_broker[BROKER_COL]
+        .fillna("—")
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "—", "None": "—", "": "—"})
+    )
     by_broker = (
-        base_kpi
-        .assign(_broker=base_kpi[BROKER_COL].astype(str).str.strip().replace({"": "—"}))
-        .groupby("_broker", dropna=False)["id"].size()
+        temp_broker.groupby("broker_label", dropna=False)["id"].size()
         .reset_index(name="membros")
-        .rename(columns={"_broker": "broker"})
+        .rename(columns={"broker_label": "broker"})
         .sort_values("membros", ascending=False)
     )
 else:
@@ -519,13 +538,20 @@ EXCLUDE_TURMAS = {
     "aldeia adicional", "adicional aldeia"
 }
 if not base_kpi.empty and "turma" in base_kpi.columns:
-    turma_series = base_kpi["turma"].astype(str).str.strip()
-    keep_mask = ~turma_series.str.lower().isin(EXCLUDE_TURMAS)
+    temp_turma = base_kpi.copy()
+    temp_turma["turma_label"] = (
+        temp_turma["turma"]
+        .fillna("—")
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "—", "None": "—", "": "—"})
+    )
+    keep_mask = ~temp_turma["turma_label"].str.lower().isin(EXCLUDE_TURMAS)
     by_turma = (
-        base_kpi.loc[keep_mask]
-                .assign(turma=turma_series[keep_mask].replace({"": "—"}))
-                .groupby("turma", dropna=False)["id"].size()
+        temp_turma.loc[keep_mask]
+                .groupby("turma_label", dropna=False)["id"].size()
                 .reset_index(name="membros")
+                .rename(columns={"turma_label": "turma"})
                 .sort_values("membros", ascending=False)
     )
 else:
@@ -604,6 +630,18 @@ st.divider()
 # ============================================================
 # 11) GRÁFICOS DE BARRAS – ECHARTS
 # ============================================================
+def sanitize_options(obj):
+    """Garante que não existam NaN ou Infinity no dicionário de opções,
+    substituindo-os por None (que vira null no JSON)."""
+    if isinstance(obj, dict):
+        return {k: sanitize_options(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_options(i) for i in obj]
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+    return obj
+
 def _locked_slider_common():
     return {
         "handleSize": 0, "handleStyle": {"opacity": 0}, "showDetail": False, "brushSelect": False,
@@ -645,7 +683,7 @@ def echarts_horizontal_bar(labels, values, title=None, bar_color=ACCENT_GREEN):
     }
     if title:
         options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
-    st_echarts(options=options, height=f"{height_px}px", theme="dark")
+    st_echarts(options=sanitize_options(options), height=f"{height_px}px", theme="dark")
 
 def echarts_vertical_bar(labels, values, title=None, bar_color=ACCENT_GREEN):
     n = len(labels)
@@ -689,7 +727,7 @@ def echarts_vertical_bar(labels, values, title=None, bar_color=ACCENT_GREEN):
     }
     if title:
         options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
-    st_echarts(options=options, height="360px", theme="dark")
+    st_echarts(options=sanitize_options(options), height="360px", theme="dark")
 
 # ---------------------------
 # 12) BARRAS LADO A LADO

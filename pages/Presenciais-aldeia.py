@@ -9,6 +9,19 @@ import streamlit as st
 from streamlit_echarts import st_echarts
 from google.cloud import bigquery
 from google.oauth2 import service_account
+import math
+
+def sanitize_options(obj):
+    """Garante que não existam NaN ou Infinity no dicionário de opções,
+    substituindo-os por None (que vira null no JSON)."""
+    if isinstance(obj, dict):
+        return {k: sanitize_options(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_options(i) for i in obj]
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+    return obj
 
 
 # ---------------------------
@@ -190,6 +203,20 @@ if df.empty:
     st.warning("Nenhum registro encontrado na tabela de Presenciais.")
     st.stop()
 
+# --- FILTRO DE LINHAS VAZIAS ---
+def is_not_empty(val):
+    s = str(val).strip().lower()
+    return s not in ["", "nan", "none", "null", "nat"]
+
+# Tenta filtrar por nome, email ou telefone (se existirem na query)
+cols_to_check = [c for c in ["nome", "email", "telefone"] if c in df.columns]
+if cols_to_check:
+    mask_valid = df[cols_to_check[0]].apply(is_not_empty)
+    for col in cols_to_check[1:]:
+        mask_valid |= df[col].apply(is_not_empty)
+    df = df[mask_valid].copy()
+# ------------------------------
+
 last_updated_str = pd.Timestamp.now(tz="America/Sao_Paulo").strftime("%d/%m/%Y %H:%M:%S")
 _sb_last_placeholder.caption(f"🕒 Última atualização: {last_updated_str}")
 
@@ -328,7 +355,7 @@ def echarts_vertical_bar_dates(labels, values, title=None, bar_color=ACCENT_GREE
     if title:
         options["title"] = {"text": title, "left": 0, "textStyle": {"color": "#E5E7EB"}}
 
-    st_echarts(options=options, height="360px", theme="dark")
+    st_echarts(options=sanitize_options(options), height="360px", theme="dark")
 
 
 # ---------------------------
