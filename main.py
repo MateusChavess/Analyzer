@@ -137,6 +137,20 @@ if df.empty:
     st.warning("Nenhum registro encontrado na tabela.")
     st.stop()
 
+# --- FILTRO DE LINHAS VAZIAS ---
+# Remove linhas onde Nome, Email e Telefone estão todos vazios
+def is_not_empty(val):
+    s = str(val).strip().lower()
+    return s not in ["", "nan", "none", "null", "nat"]
+
+mask_valid = df["nome"].apply(is_not_empty) | df["email"].apply(is_not_empty) | df["telefone"].apply(is_not_empty)
+df = df[mask_valid].copy()
+
+if df.empty:
+    st.warning("Nenhum registro válido (com Nome, Email ou Telefone) encontrado.")
+    st.stop()
+# ------------------------------
+
 last_updated_str = pd.Timestamp.now(tz='America/Sao_Paulo').strftime('%d/%m/%Y %H:%M:%S')
 _sb_last_placeholder.caption(f"🕒 Última atualização: {last_updated_str}")
 
